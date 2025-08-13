@@ -43,22 +43,22 @@ const upload = multer({
   }
 });
 
-// 🔧 수정된 로컬 Whisper 함수 (올바른 매개변수)
+// 🔥 초간단 로컬 Whisper 함수 (문제가 되는 매개변수 모두 제거)
 async function transcribeWithLocalWhisper(audioFilePath) {
   return new Promise((resolve, reject) => {
     console.log('🎙️ 로컬 Whisper로 변환 시작...');
     console.log('📁 파일 경로:', audioFilePath);
     
-    // 🔧 올바른 Whisper CLI 매개변수 사용
+    // 🔧 최소한의 필수 매개변수만 사용
     const whisperCmd = '/opt/venv/bin/python';
-    // 더 간단한 Whisper 실행 (문제 해결용)
     const whisperArgs = [
       '-m', 'whisper',
       audioFilePath,
-      '--model', 'tiny',
-      '--language', 'ko',
-      '--output_format', 'txt',
-      '--output_dir', uploadDir
+      '--model', 'tiny',           // 가장 작은 모델
+      '--language', 'ko',          // 한국어
+      '--output_format', 'txt',    // 텍스트 출력
+      '--output_dir', uploadDir    // 출력 디렉토리
+      // 문제가 되는 매개변수들 모두 제거
     ];
     
     console.log('🐍 Python 명령:', whisperCmd, whisperArgs.join(' '));
@@ -72,12 +72,12 @@ async function transcribeWithLocalWhisper(audioFilePath) {
     let stderr = '';
     let timeoutId = null;
 
-    // 45초 타임아웃 설정 (조금 더 여유롭게)
+    // 60초 타임아웃 (여유롭게)
     timeoutId = setTimeout(() => {
-      console.log('⏰ Whisper 타임아웃 (45초)');
+      console.log('⏰ Whisper 타임아웃 (60초)');
       whisper.kill('SIGKILL');
       reject(new Error('Whisper 처리 시간 초과'));
-    }, 45000);
+    }, 60000);
 
     whisper.stdout.on('data', (data) => {
       const output = data.toString();
@@ -174,7 +174,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       transcript: transcript,
       filename: req.file.filename,
       size: req.file.size,
-      method: 'Local Whisper (Tiny Model)',
+      method: 'Local Whisper (Tiny Model - Simplified)',
       timestamp: new Date().toISOString()
     });
 
@@ -208,7 +208,7 @@ router.get('/diagnose', (req, res) => {
     status: 'OK',
     message: '로컬 Whisper STT 서비스가 정상 작동 중입니다.',
     timestamp: new Date().toISOString(),
-    method: 'Local Whisper (Tiny Model)',
+    method: 'Local Whisper (Tiny Model - Simplified)',
     cost: '$0 (완전 무료)',
     model: 'whisper-tiny (39MB)',
     features: ['한국어 지원', '상업적 사용 가능', '무제한 사용량']
