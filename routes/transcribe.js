@@ -12,7 +12,7 @@ const uploadDir = process.env.UPLOAD_DIR || 'uploads';
 // 업로드 디렉토리가 없으면 생성
 fs.ensureDirSync(uploadDir);
 
-// Whisper 로컬 실행 함수 (Docker 가상환경 지원)
+// Whisper 로컬 실행 함수 (타임아웃 추가)
 async function transcribeWithLocalWhisper(audioFilePath) {
   return new Promise((resolve, reject) => {
     console.log('🎙️ 로컬 Whisper로 변환 시작...');
@@ -25,16 +25,23 @@ async function transcribeWithLocalWhisper(audioFilePath) {
     
     console.log('🐍 Python 경로:', pythonCmd);
     
-    // python -m whisper 명령어 실행
+    // python -m whisper 명령어 실행 (tiny 모델 사용)
     const whisper = spawn(pythonCmd, [
       '-m', 'whisper',
       audioFilePath,
       '--language', 'ko',
-      '--model', 'base',
+      '--model', 'tiny',  // 작은 모델 사용
       '--output_format', 'txt',
       '--output_dir', uploadDir,
       '--verbose', 'False'
     ]);
+
+    // 60초 타임아웃 설정
+    const timeout = setTimeout(() => {
+      console.log('⏰ Whisper 처리 시간 초과 (60초)');
+      whisper.kill('SIGTERM');
+      reject(new Error('음성 변환 시간이 초과되었습니다. 더 짧은 음성으로 시도해주세요.'));
+    }, 60000); // 60초
 
     let stdout = '';
     let stderr = '';
@@ -50,6 +57,7 @@ async function transcribeWithLocalWhisper(audioFilePath) {
     });
 
     whisper.on('close', async (code) => {
+      clearTimeout(timeout); // 타임아웃 클리어
       console.log(`Whisper 프로세스 종료, 코드: ${code}`);
       
       if (code === 0) {
@@ -80,6 +88,10 @@ async function transcribeWithLocalWhisper(audioFilePath) {
           console.log('❌ 결과 파일 읽기 오류:', error);
           reject(error);
         }
+      } else if (code === null) {
+        // 프로세스가 강제 종료된 경우 (타임아웃)
+        console.log('❌ Whisper 프로세스가 타임아웃으로 종료됨');
+        reject(new Error('음성 변환 시간이 초과되었습니다.'));
       } else {
         console.log('❌ Whisper 실행 실패:', stderr);
         reject(new Error(`Whisper 실행 실패: ${stderr}`));
@@ -87,6 +99,7 @@ async function transcribeWithLocalWhisper(audioFilePath) {
     });
 
     whisper.on('error', (error) => {
+      clearTimeout(timeout);
       console.log('❌ Whisper 프로세스 오류:', error);
       reject(error);
     });
