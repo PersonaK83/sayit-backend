@@ -43,25 +43,22 @@ const upload = multer({
   }
 });
 
-// 🆕 메모리 최적화된 로컬 Whisper 함수
+// 🔧 수정된 로컬 Whisper 함수 (올바른 매개변수)
 async function transcribeWithLocalWhisper(audioFilePath) {
   return new Promise((resolve, reject) => {
     console.log('🎙️ 로컬 Whisper로 변환 시작...');
     console.log('📁 파일 경로:', audioFilePath);
     
-    // 🔧 Render 환경에서 메모리 최적화된 Whisper 실행
+    // 🔧 올바른 Whisper CLI 매개변수 사용
     const whisperCmd = '/opt/venv/bin/python';
+    // 더 간단한 Whisper 실행 (문제 해결용)
     const whisperArgs = [
       '-m', 'whisper',
       audioFilePath,
-      '--model', 'tiny',           // 🔥 가장 작은 모델 (39MB)
+      '--model', 'tiny',
       '--language', 'ko',
       '--output_format', 'txt',
-      '--output_dir', uploadDir,
-      '--fp16', 'False',           // 🔧 메모리 절약
-      '--temperature', '0',        // 🔧 결정적 출력
-      '--no-speech-threshold', '0.6', // 🔧 무음 감지 최적화
-      '--logprob-threshold', '-1.0'    // 🔧 품질 임계값
+      '--output_dir', uploadDir
     ];
     
     console.log('🐍 Python 명령:', whisperCmd, whisperArgs.join(' '));
@@ -75,12 +72,12 @@ async function transcribeWithLocalWhisper(audioFilePath) {
     let stderr = '';
     let timeoutId = null;
 
-    // 30초 타임아웃 설정
+    // 45초 타임아웃 설정 (조금 더 여유롭게)
     timeoutId = setTimeout(() => {
-      console.log('⏰ Whisper 타임아웃 (30초)');
+      console.log('⏰ Whisper 타임아웃 (45초)');
       whisper.kill('SIGKILL');
       reject(new Error('Whisper 처리 시간 초과'));
-    }, 30000);
+    }, 45000);
 
     whisper.stdout.on('data', (data) => {
       const output = data.toString();
