@@ -10,7 +10,7 @@ const router = express.Router();
 const uploadDir = process.env.UPLOAD_DIR || 'uploads';
 fs.ensureDirSync(uploadDir);
 
-// Multer 설정 (기존과 동일)
+// Multer 설정
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadDir);
@@ -25,7 +25,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 25 * 1024 * 1024, // 25MB
+    fileSize: 25 * 1024 * 1024,
     files: 1
   },
   fileFilter: (req, file, cb) => {
@@ -43,175 +43,127 @@ const upload = multer({
   }
 });
 
-// 🔥 초간단 로컬 Whisper 함수 (문제가 되는 매개변수 모두 제거)
+// ✅ 완전히 간단한 Whisper 실행 (문제 매개변수 완전 제거)
 async function transcribeWithLocalWhisper(audioFilePath) {
   return new Promise((resolve, reject) => {
-    console.log('🎙️ 로컬 Whisper로 변환 시작...');
-    console.log('📁 파일 경로:', audioFilePath);
+    console.log('🎙️ === 간단한 로컬 Whisper 시작 ===');
+    console.log('📁 파일:', audioFilePath);
     
-    // 🔧 최소한의 필수 매개변수만 사용
-    const whisperCmd = '/opt/venv/bin/python';
+    // 🔥 최소 필수 매개변수만 사용 (문제 매개변수 완전 제거)
     const whisperArgs = [
       '-m', 'whisper',
       audioFilePath,
-      '--model', 'tiny',           // 가장 작은 모델
-      '--language', 'ko',          // 한국어
-      '--output_format', 'txt',    // 텍스트 출력
-      '--output_dir', uploadDir    // 출력 디렉토리
-      // 문제가 되는 매개변수들 모두 제거
+      '--model', 'tiny',
+      '--language', 'ko',
+      '--output_format', 'txt',
+      '--output_dir', uploadDir
     ];
     
-    console.log('🐍 Python 명령:', whisperCmd, whisperArgs.join(' '));
+    console.log('🚀 실행 명령:', '/opt/venv/bin/python', whisperArgs.join(' '));
     
-    const whisper = spawn(whisperCmd, whisperArgs, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, PYTHONUNBUFFERED: '1' }
-    });
-
-    let stdout = '';
+    const whisper = spawn('/opt/venv/bin/python', whisperArgs);
+    
     let stderr = '';
-    let timeoutId = null;
-
-    // 60초 타임아웃 (여유롭게)
-    timeoutId = setTimeout(() => {
-      console.log('⏰ Whisper 타임아웃 (60초)');
-      whisper.kill('SIGKILL');
-      reject(new Error('Whisper 처리 시간 초과'));
-    }, 60000);
-
+    
     whisper.stdout.on('data', (data) => {
-      const output = data.toString();
-      console.log('Whisper 출력:', output);
-      stdout += output;
+      console.log('📤 Whisper 출력:', data.toString());
     });
 
     whisper.stderr.on('data', (data) => {
-      const error = data.toString();
-      console.log('Whisper 로그:', error);
-      stderr += error;
+      const log = data.toString();
+      console.log('📋 Whisper 로그:', log);
+      stderr += log;
     });
 
     whisper.on('close', async (code) => {
-      if (timeoutId) clearTimeout(timeoutId);
-      
-      console.log(`🏁 Whisper 종료 (코드: ${code})`);
+      console.log(`🏁 Whisper 완료 (코드: ${code})`);
       
       if (code === 0) {
         try {
-          // 텍스트 파일 찾기
           const audioName = path.parse(audioFilePath).name;
           const textFilePath = path.join(uploadDir, `${audioName}.txt`);
           
-          console.log('📄 텍스트 파일 경로:', textFilePath);
-          
           if (await fs.pathExists(textFilePath)) {
             const transcript = await fs.readFile(textFilePath, 'utf8');
-            const cleanTranscript = transcript.trim();
+            const result = transcript.trim();
             
-            console.log('✅ 변환 완료:', cleanTranscript);
+            console.log('✅ 변환 성공:', result);
             
-            // 임시 파일 정리
-            try {
-              await fs.remove(textFilePath);
-            } catch (cleanupError) {
-              console.warn('텍스트 파일 정리 실패:', cleanupError.message);
-            }
-            
-            resolve(cleanTranscript || '변환된 텍스트가 없습니다.');
+            await fs.remove(textFilePath).catch(() => {});
+            resolve(result || '변환된 텍스트가 없습니다.');
           } else {
-            console.warn('⚠️ 텍스트 파일을 찾을 수 없음');
+            console.log('⚠️ 텍스트 파일 없음');
             resolve('변환된 텍스트가 없습니다.');
           }
         } catch (error) {
-          console.error('❌ 텍스트 파일 읽기 오류:', error);
-          resolve('텍스트 파일 처리 중 오류가 발생했습니다.');
+          console.error('❌ 파일 처리 오류:', error);
+          resolve('파일 처리 중 오류가 발생했습니다.');
         }
       } else {
-        console.error('❌ Whisper 실행 실패:', stderr);
-        resolve('음성 변환 중 오류가 발생했습니다.');
+        console.error('❌ Whisper 실패:', stderr);
+        resolve('음성 변환에 실패했습니다.');
       }
     });
 
     whisper.on('error', (error) => {
-      if (timeoutId) clearTimeout(timeoutId);
-      console.error('❌ Whisper 프로세스 오류:', error);
-      resolve('Whisper 실행 중 오류가 발생했습니다.');
+      console.error('❌ 프로세스 오류:', error);
+      resolve('Whisper 실행 오류가 발생했습니다.');
     });
   });
 }
 
-// STT 변환 엔드포인트
+// STT 엔드포인트
 router.post('/transcribe', upload.single('audio'), async (req, res) => {
   let tempFilePath = null;
   
   try {
-    console.log('\n🎤 === STT 변환 요청 시작 ===');
-    console.log('📅 시간:', new Date().toISOString());
+    console.log('\n🎤 === STT 변환 시작 ===');
     
     if (!req.file) {
       return res.status(400).json({
-        error: '오디오 파일이 업로드되지 않았습니다.',
-        code: 'NO_FILE_UPLOADED'
+        error: '오디오 파일이 없습니다.',
+        code: 'NO_FILE'
       });
     }
 
     tempFilePath = req.file.path;
     
-    console.log(`📁 파일 업로드 완료:`, {
-      filename: req.file.filename,
-      originalname: req.file.originalname,
+    console.log('📁 업로드 완료:', {
       size: req.file.size,
-      mimetype: req.file.mimetype,
+      type: req.file.mimetype,
       path: req.file.path
     });
 
-    // 로컬 Whisper로 변환
     const transcript = await transcribeWithLocalWhisper(tempFilePath);
     
-    // 성공 응답
     res.json({
       success: true,
       transcript: transcript,
-      filename: req.file.filename,
-      size: req.file.size,
-      method: 'Local Whisper (Tiny Model - Simplified)',
+      method: 'Local Whisper Tiny (Simplified)',
       timestamp: new Date().toISOString()
     });
 
-    console.log('🎉 STT 변환 성공!');
-    console.log('📝 변환 결과:', transcript);
+    console.log('🎉 STT 성공:', transcript);
 
   } catch (error) {
-    console.error('❌ STT 변환 실패:', error);
-    
+    console.error('❌ STT 오류:', error);
     res.status(500).json({
-      error: '음성 변환 중 오류가 발생했습니다.',
-      details: error.message,
-      code: 'TRANSCRIPTION_FAILED'
+      error: '변환 중 오류가 발생했습니다.',
+      details: error.message
     });
   } finally {
-    // 임시 파일 정리
     if (tempFilePath) {
-      try {
-        await fs.remove(tempFilePath);
-        console.log('🧹 임시 파일 삭제 완료');
-      } catch (cleanupError) {
-        console.error('임시 파일 삭제 실패:', cleanupError.message);
-      }
+      fs.remove(tempFilePath).catch(() => {});
     }
   }
 });
 
-// 진단 엔드포인트
 router.get('/diagnose', (req, res) => {
   res.json({
     status: 'OK',
-    message: '로컬 Whisper STT 서비스가 정상 작동 중입니다.',
-    timestamp: new Date().toISOString(),
-    method: 'Local Whisper (Tiny Model - Simplified)',
-    cost: '$0 (완전 무료)',
-    model: 'whisper-tiny (39MB)',
-    features: ['한국어 지원', '상업적 사용 가능', '무제한 사용량']
+    message: '로컬 Whisper (간단 버전) 준비 완료',
+    method: 'Simplified Local Whisper',
+    cost: '$0'
   });
 });
 
