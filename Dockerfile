@@ -8,11 +8,16 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
+    python3-venv \
     ffmpeg \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Whisper 설치
-RUN pip3 install openai-whisper
+# Python 가상환경 생성 및 Whisper 설치
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --upgrade pip
+RUN pip install openai-whisper
 
 # package.json 복사 및 의존성 설치
 COPY package*.json ./
@@ -27,5 +32,8 @@ RUN mkdir -p uploads
 # 포트 노출
 EXPOSE 3000
 
+# 환경 변수 설정 (가상환경 PATH 유지)
+ENV PATH="/opt/venv/bin:$PATH"
+
 # 애플리케이션 시작
-CMD ["npm", "start"] 
+CMD ["npm", "start"]

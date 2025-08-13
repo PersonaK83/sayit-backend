@@ -1,23 +1,32 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
 const fs = require('fs-extra');
+const path = require('path');
 const { spawn } = require('child_process');
 
 const router = express.Router();
 
-// 업로드 디렉토리 생성
-const uploadDir = path.join(__dirname, '..', process.env.UPLOAD_DIR || 'uploads');
+// 업로드 디렉토리 설정
+const uploadDir = process.env.UPLOAD_DIR || 'uploads';
+
+// 업로드 디렉토리가 없으면 생성
 fs.ensureDirSync(uploadDir);
 
-// Whisper 로컬 실행 함수 (Python 모듈 방식)
+// Whisper 로컬 실행 함수 (Docker 가상환경 지원)
 async function transcribeWithLocalWhisper(audioFilePath) {
   return new Promise((resolve, reject) => {
     console.log('🎙️ 로컬 Whisper로 변환 시작...');
     console.log('📁 파일 경로:', audioFilePath);
     
-    // python3 -m whisper 명령어 실행
-    const whisper = spawn('python3', [
+    // Docker 환경에서는 가상환경의 python을 사용
+    const pythonCmd = process.env.NODE_ENV === 'production' 
+      ? '/opt/venv/bin/python'  // Docker 가상환경 경로
+      : 'python3';              // 로컬 개발 환경
+    
+    console.log('🐍 Python 경로:', pythonCmd);
+    
+    // python -m whisper 명령어 실행
+    const whisper = spawn(pythonCmd, [
       '-m', 'whisper',
       audioFilePath,
       '--language', 'ko',
@@ -59,58 +68,57 @@ async function transcribeWithLocalWhisper(audioFilePath) {
             await fs.remove(txtPath);
             
             resolve({
-              text: text.trim() || '변환된 텍스트가 없습니다.',
+              text: text.trim(),
               language: 'ko',
               duration: 0
             });
           } else {
-            console.log('❌ 결과 파일이 생성되지 않았습니다.');
-            console.log('📂 업로드 디렉토리 내용:', fs.readdirSync(uploadDir));
-            
-            // stdout에서 텍스트 추출 시도
-            const textMatch = stdout.match(/\[.*?\]\s*(.*?)$/m);
-            if (textMatch && textMatch[1]) {
-              resolve({
-                text: textMatch[1].trim(),
-                language: 'ko',
-                duration: 0
-              });
-            } else {
-              reject(new Error('Whisper 결과 파일을 찾을 수 없습니다.'));
-            }
+            console.log('❌ 결과 파일을 찾을 수 없음:', txtPath);
+            reject(new Error('Whisper 결과 파일을 찾을 수 없습니다.'));
           }
         } catch (error) {
-          console.error('결과 처리 오류:', error);
-          reject(new Error(`결과 파싱 오류: ${error.message}`));
+          console.log('❌ 결과 파일 읽기 오류:', error);
+          reject(error);
         }
       } else {
-        console.error('Whisper 실행 실패:', stderr);
-        reject(new Error(`Whisper 실행 실패 (코드: ${code}): ${stderr}`));
+        console.log('❌ Whisper 실행 실패:', stderr);
+        reject(new Error(`Whisper 실행 실패: ${stderr}`));
       }
     });
 
     whisper.on('error', (error) => {
-      console.error('Whisper 프로세스 오류:', error);
-      reject(new Error(`Whisper 실행 오류: ${error.message}`));
+      console.log('❌ Whisper 프로세스 오류:', error);
+      reject(error);
     });
   });
 }
 
-// Whisper 설치 확인 함수 (Python 모듈 방식)
+// Whisper 설치 확인 함수 (Docker 가상환경 지원)
 async function checkWhisperInstallation() {
   return new Promise((resolve) => {
     console.log('🔍 Whisper 설치 확인 중...');
     
-    const whisper = spawn('python3', ['-m', 'whisper', '--help']);
+    // Docker 환경에서는 가상환경의 python을 사용
+    const pythonCmd = process.env.NODE_ENV === 'production' 
+      ? '/opt/venv/bin/python'  // Docker 가상환경 경로
+      : 'python3';              // 로컬 개발 환경
     
-    whisper.on('close', (code) => {
-      const isInstalled = code === 0;
-      console.log(`Whisper 설치 상태: ${isInstalled ? '✅ 설치됨' : '❌ 미설치'}`);
+    const check = spawn(pythonCmd, ['-c', 'import whisper; print("installed")']);
+    
+    let output = '';
+    
+    check.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    check.on('close', (code) => {
+      const isInstalled = code === 0 && output.includes('installed');
+      console.log(`🔍 Whisper 설치 상태: ${isInstalled ? '설치됨' : '설치되지 않음'}`);
       resolve(isInstalled);
     });
     
-    whisper.on('error', (error) => {
-      console.log('❌ Whisper 확인 오류:', error.message);
+    check.on('error', (error) => {
+      console.log('❌ Whisper 확인 오류:', error);
       resolve(false);
     });
   });
@@ -148,93 +156,52 @@ const upload = multer({
       'audio/x-aac',        // AAC 추가 형식
       'audio/mp4a-latm',    // AAC 추가 형식
       'audio/ogg',
+      'audio/opus',
       'audio/flac',
-      'audio/m4a'
+      'audio/x-flac'
     ];
     
-    console.log(`📁 업로드 파일 정보:`, {
-      originalname: file.originalname,
-      mimetype: file.mimetype,
-      size: file.size
-    });
-    
     if (allowedMimes.includes(file.mimetype)) {
-      console.log('✅ 파일 형식 허용됨:', file.mimetype);
       cb(null, true);
     } else {
-      console.log('❌ 지원하지 않는 파일 형식:', file.mimetype);
-      console.log('📋 허용되는 형식들:', allowedMimes);
-      cb(new Error(`지원하지 않는 파일 형식입니다: ${file.mimetype}`), false);
+      cb(new Error(`지원하지 않는 파일 형식입니다: ${file.mimetype}`));
     }
   }
 });
 
-// 진단 엔드포인트
+// 네트워크 진단 엔드포인트
 router.get('/diagnose', async (req, res) => {
-  console.log('🔍 시스템 진단 시작...');
-  
-  const diagnosis = {
-    timestamp: new Date().toISOString(),
-    tests: {}
-  };
-
-  // Whisper 설치 확인
-  diagnosis.tests.whisperInstalled = await checkWhisperInstallation();
-  
-  // OpenAI API 키 확인
-  diagnosis.tests.openaiApiKey = {
-    configured: !!process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'your_openai_api_key_here',
-    format: process.env.OPENAI_API_KEY?.startsWith('sk-') || false
-  };
-
-  // 업로드 디렉토리 확인
-  diagnosis.tests.uploadDirectory = {
-    exists: fs.existsSync(uploadDir),
-    path: uploadDir,
-    writable: true
-  };
-
-  // 지원되는 파일 형식 정보 추가
-  diagnosis.supportedMimeTypes = [
-    'audio/mpeg',
-    'audio/mp4', 
-    'audio/wav',
-    'audio/x-wav',
-    'audio/wave',
-    'audio/webm',
-    'audio/aac',
-    'audio/ogg',
-    'audio/flac',
-    'audio/m4a'
-  ];
-
-  // 사용할 STT 방식 결정
-  if (diagnosis.tests.whisperInstalled) {
-    diagnosis.sttMethod = 'local-whisper';
-    diagnosis.status = '✅ 로컬 Whisper 사용 가능 (무료)';
-  } else if (diagnosis.tests.openaiApiKey.configured) {
-    diagnosis.sttMethod = 'openai-api';
-    diagnosis.status = '⚠️ OpenAI API 사용 (유료 - 할당량 확인 필요)';
-  } else {
-    diagnosis.sttMethod = 'dummy';
-    diagnosis.status = '🔧 더미 모드 (테스트용)';
+  try {
+    const diagnostics = {
+      server: '정상',
+      timestamp: new Date().toISOString(),
+      whisper: await checkWhisperInstallation() ? '설치됨' : '설치되지 않음',
+      uploadDir: {
+        exists: fs.existsSync(uploadDir),
+        path: uploadDir
+      },
+      environment: process.env.NODE_ENV || 'development',
+      python: process.env.NODE_ENV === 'production' 
+        ? '/opt/venv/bin/python'  // Docker 가상환경 경로
+        : 'python3'               // 로컬 개발 환경
+    };
+    
+    res.json(diagnostics);
+  } catch (error) {
+    res.status(500).json({
+      error: '진단 중 오류 발생',
+      details: error.message
+    });
   }
-
-  console.log('📋 진단 결과:', diagnosis);
-  res.json(diagnosis);
 });
 
 // STT 변환 엔드포인트
-router.post('/transcribe', (req, res, next) => {
-  console.log('🎯 /api/transcribe 요청 수신됨');
-  console.log('📍 클라이언트 IP:', req.ip);
-  console.log('⏰ 요청 시간:', new Date().toISOString());
-  next();
-}, upload.single('audio'), async (req, res) => {
+router.post('/transcribe', upload.single('audio'), async (req, res) => {
   let tempFilePath = null;
   
   try {
-    console.log('📤 파일 업로드 처리 시작');
+    console.log('\n🎤 === STT 변환 요청 시작 ===');
+    console.log('📅 시간:', new Date().toISOString());
     
     if (!req.file) {
       return res.status(400).json({
@@ -278,45 +245,41 @@ router.post('/transcribe', (req, res, next) => {
       
       console.log('✅ 로컬 Whisper 변환 완료:', response);
       return res.json(response);
+    } else {
+      // Whisper가 설치되지 않은 경우 더미 응답
+      console.log('⚠️ Whisper가 설치되지 않음. 더미 응답 반환');
+      
+      await fs.remove(tempFilePath);
+      
+      return res.json({
+        text: '음성을 텍스트로 변환했습니다. (더미 데이터)',
+        confidence: 0.8,
+        duration: 5.0,
+        language: 'ko',
+        model: 'dummy',
+        method: 'fallback',
+        cost: 'free',
+        inputFormat: req.file.mimetype
+      });
     }
-
-    // 2순위: 더미 응답
-    console.log('🔧 더미 모드 사용 (Whisper 미설치)');
-    
-    await fs.remove(tempFilePath);
-    console.log('🗑️ 임시 파일 삭제됨');
-    
-    const dummyResponse = {
-      text: `🎙️ 더미 STT 변환 결과입니다! 파일: "${req.file.originalname}" (${req.file.size} bytes, ${req.file.mimetype})`,
-      confidence: 0.95,
-      duration: Math.random() * 10 + 5,
-      language: 'ko',
-      model: 'dummy',
-      method: 'dummy',
-      cost: 'free',
-      inputFormat: req.file.mimetype
-    };
-    
-    console.log('✅ 더미 응답 반환:', dummyResponse);
-    return res.json(dummyResponse);
 
   } catch (error) {
-    console.error('❌ STT 변환 오류:', error.message);
+    console.error('❌ STT 변환 오류:', error);
     
-    // 파일 정리
-    if (tempFilePath) {
+    // 임시 파일 정리
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
       try {
         await fs.remove(tempFilePath);
-        console.log('🗑️ 오류 발생으로 임시 파일 삭제됨');
+        console.log('🗑️ 오류 발생 시 임시 파일 삭제됨');
       } catch (cleanupError) {
-        console.error('파일 정리 오류:', cleanupError);
+        console.error('❌ 파일 정리 실패:', cleanupError);
       }
     }
-
+    
     res.status(500).json({
       error: '음성 변환 중 오류가 발생했습니다.',
-      code: 'TRANSCRIPTION_ERROR',
-      details: error.message
+      details: error.message,
+      code: 'TRANSCRIPTION_ERROR'
     });
   }
 });
