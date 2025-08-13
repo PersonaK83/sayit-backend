@@ -51,31 +51,40 @@ async function transcribeWithWebSpeechAPI(audioFilePath) {
     console.log('🎙️ Web Speech API 변환 시작...');
     console.log('📁 파일 경로:', audioFilePath);
     
+    // 🔧 Chrome 경로 명시적 지정
+    const chromeExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || 
+                                 '/usr/bin/google-chrome-stable';
+    
+    console.log('🌐 Chrome 경로:', chromeExecutablePath);
+    
     // 🔧 메모리 최적화된 Puppeteer 설정
     browser = await puppeteer.launch({
+      executablePath: chromeExecutablePath,  // Chrome 경로 명시
       headless: 'new',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',        // /dev/shm 사용 안함
-        '--disable-accelerated-2d-canvas', // 2D 캔버스 가속 비활성화
-        '--disable-gpu',                  // GPU 사용 안함
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
         '--disable-features=TranslateUI',
         '--disable-ipc-flooding-protection',
-        '--memory-pressure-off',          // 메모리 압박 모니터링 비활성화
-        '--max_old_space_size=256',       // 힙 메모리 256MB 제한
+        '--memory-pressure-off',
+        '--max_old_space_size=256',
         '--disable-extensions',
         '--disable-plugins',
-        '--disable-images',               // 이미지 로딩 비활성화
+        '--disable-images',
         '--disable-javascript-harmony-shipping',
         '--disable-background-networking',
-        '--single-process'                // 단일 프로세스로 실행
+        '--single-process'
       ],
-      timeout: 15000  // 15초 타임아웃
+      timeout: 15000
     });
+
+    console.log('✅ Chrome 브라우저 시작 성공');
 
     const page = await browser.newPage();
     
