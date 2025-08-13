@@ -1,0 +1,7 @@
+node_modules/
+.env.local
+uploads/*.aac
+uploads/*.wav
+uploads/*.mp3
+.DS_Store
+*.log
