@@ -1,7 +1,16 @@
 node_modules/
+.env
 .env.local
 uploads/*.aac
 uploads/*.wav
 uploads/*.mp3
+uploads/*.m4a
 .DS_Store
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Railway 관련 파일 (더 이상 사용하지 않음)
+railway.json
+Dockerfile
