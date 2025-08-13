@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs-extra');
 const path = require('path');
-const puppeteer = require('puppeteer');
+const { spawn } = require('child_process');
 
 const router = express.Router();
 
@@ -43,214 +43,104 @@ const upload = multer({
   }
 });
 
-// 🆕 극도로 최적화된 Web Speech API 함수
-async function transcribeWithWebSpeechAPI(audioFilePath) {
-  let browser = null;
-  
-  try {
-    console.log('🎙️ Web Speech API 변환 시작...');
+// 🆕 메모리 최적화된 로컬 Whisper 함수
+async function transcribeWithLocalWhisper(audioFilePath) {
+  return new Promise((resolve, reject) => {
+    console.log('🎙️ 로컬 Whisper로 변환 시작...');
     console.log('📁 파일 경로:', audioFilePath);
     
-    // 🔧 Chrome 경로 명시적 지정
-    const chromeExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || 
-                                 '/usr/bin/google-chrome-stable';
+    // 🔧 Render 환경에서 메모리 최적화된 Whisper 실행
+    const whisperCmd = '/opt/venv/bin/python';
+    const whisperArgs = [
+      '-m', 'whisper',
+      audioFilePath,
+      '--model', 'tiny',           // 🔥 가장 작은 모델 (39MB)
+      '--language', 'ko',
+      '--output_format', 'txt',
+      '--output_dir', uploadDir,
+      '--fp16', 'False',           // 🔧 메모리 절약
+      '--temperature', '0',        // 🔧 결정적 출력
+      '--no-speech-threshold', '0.6', // 🔧 무음 감지 최적화
+      '--logprob-threshold', '-1.0'    // 🔧 품질 임계값
+    ];
     
-    console.log('🌐 Chrome 경로:', chromeExecutablePath);
+    console.log('🐍 Python 명령:', whisperCmd, whisperArgs.join(' '));
     
-    // 🔧 메모리 최적화된 Puppeteer 설정
-    browser = await puppeteer.launch({
-      executablePath: chromeExecutablePath,  // Chrome 경로 명시
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--disable-features=TranslateUI',
-        '--disable-ipc-flooding-protection',
-        '--memory-pressure-off',
-        '--max_old_space_size=256',
-        '--disable-extensions',
-        '--disable-plugins',
-        '--disable-images',
-        '--disable-javascript-harmony-shipping',
-        '--disable-background-networking',
-        '--single-process'
-      ],
-      timeout: 15000
+    const whisper = spawn(whisperCmd, whisperArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, PYTHONUNBUFFERED: '1' }
     });
 
-    console.log('✅ Chrome 브라우저 시작 성공');
+    let stdout = '';
+    let stderr = '';
+    let timeoutId = null;
 
-    const page = await browser.newPage();
-    
-    // 메모리 사용량 최소화 설정
-    await page.setViewport({ width: 800, height: 600 });
-    await page.setJavaScriptEnabled(true);
-    
-    // 불필요한 리소스 차단
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      const resourceType = req.resourceType();
-      if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
+    // 30초 타임아웃 설정
+    timeoutId = setTimeout(() => {
+      console.log('⏰ Whisper 타임아웃 (30초)');
+      whisper.kill('SIGKILL');
+      reject(new Error('Whisper 처리 시간 초과'));
+    }, 30000);
+
+    whisper.stdout.on('data', (data) => {
+      const output = data.toString();
+      console.log('Whisper 출력:', output);
+      stdout += output;
     });
 
-    // Web Speech API HTML 페이지 생성
-    const htmlContent = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>STT</title>
-    </head>
-    <body>
-        <audio id="audioPlayer" controls style="display:none;"></audio>
-        <div id="result"></div>
-        
-        <script>
-        let recognition = null;
-        let isRecognitionActive = false;
-        
-        // Web Speech API 초기화
-        function initializeSpeechRecognition() {
-            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-                throw new Error('Web Speech API not supported');
-            }
+    whisper.stderr.on('data', (data) => {
+      const error = data.toString();
+      console.log('Whisper 로그:', error);
+      stderr += error;
+    });
+
+    whisper.on('close', async (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      
+      console.log(`🏁 Whisper 종료 (코드: ${code})`);
+      
+      if (code === 0) {
+        try {
+          // 텍스트 파일 찾기
+          const audioName = path.parse(audioFilePath).name;
+          const textFilePath = path.join(uploadDir, `${audioName}.txt`);
+          
+          console.log('📄 텍스트 파일 경로:', textFilePath);
+          
+          if (await fs.pathExists(textFilePath)) {
+            const transcript = await fs.readFile(textFilePath, 'utf8');
+            const cleanTranscript = transcript.trim();
             
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
+            console.log('✅ 변환 완료:', cleanTranscript);
             
-            recognition.continuous = true;
-            recognition.interimResults = false;
-            recognition.lang = 'ko-KR';
-            recognition.maxAlternatives = 1;
-            
-            return new Promise((resolve, reject) => {
-                let finalTranscript = '';
-                let timeoutId = null;
-                
-                recognition.onstart = () => {
-                    console.log('🎤 음성 인식 시작');
-                    isRecognitionActive = true;
-                    // 30초 타임아웃 설정
-                    timeoutId = setTimeout(() => {
-                        if (isRecognitionActive) {
-                            recognition.stop();
-                            resolve(finalTranscript || '변환된 텍스트가 없습니다.');
-                        }
-                    }, 30000);
-                };
-                
-                recognition.onresult = (event) => {
-                    console.log('📝 결과 수신:', event.results.length);
-                    
-                    for (let i = event.resultIndex; i < event.results.length; i++) {
-                        const result = event.results[i];
-                        if (result.isFinal) {
-                            finalTranscript += result[0].transcript + ' ';
-                            console.log('✅ 최종 결과:', result[0].transcript);
-                        }
-                    }
-                };
-                
-                recognition.onerror = (event) => {
-                    console.error('❌ 인식 오류:', event.error);
-                    isRecognitionActive = false;
-                    if (timeoutId) clearTimeout(timeoutId);
-                    
-                    // 오류가 있어도 부분 결과라도 반환
-                    resolve(finalTranscript || '음성 인식 중 오류가 발생했습니다.');
-                };
-                
-                recognition.onend = () => {
-                    console.log('🏁 음성 인식 종료');
-                    isRecognitionActive = false;
-                    if (timeoutId) clearTimeout(timeoutId);
-                    resolve(finalTranscript || '변환된 텍스트가 없습니다.');
-                };
-            });
-        }
-        
-        // 오디오 파일 재생 및 인식
-        async function processAudioFile(base64Data) {
+            // 임시 파일 정리
             try {
-                const audioPlayer = document.getElementById('audioPlayer');
-                audioPlayer.src = 'data:audio/wav;base64,' + base64Data;
-                
-                // 오디오 로드 대기
-                await new Promise((resolve, reject) => {
-                    audioPlayer.onloadeddata = resolve;
-                    audioPlayer.onerror = reject;
-                    audioPlayer.load();
-                });
-                
-                console.log('🔊 오디오 파일 로드 완료');
-                
-                // 음성 인식 초기화
-                const transcriptPromise = initializeSpeechRecognition();
-                
-                // 오디오 재생 시작
-                audioPlayer.play();
-                recognition.start();
-                
-                // 결과 대기
-                const transcript = await transcriptPromise;
-                
-                console.log('📋 최종 변환 결과:', transcript);
-                document.getElementById('result').textContent = transcript;
-                
-                return transcript;
-                
-            } catch (error) {
-                console.error('처리 오류:', error);
-                return '오디오 처리 중 오류가 발생했습니다.';
+              await fs.remove(textFilePath);
+            } catch (cleanupError) {
+              console.warn('텍스트 파일 정리 실패:', cleanupError.message);
             }
+            
+            resolve(cleanTranscript || '변환된 텍스트가 없습니다.');
+          } else {
+            console.warn('⚠️ 텍스트 파일을 찾을 수 없음');
+            resolve('변환된 텍스트가 없습니다.');
+          }
+        } catch (error) {
+          console.error('❌ 텍스트 파일 읽기 오류:', error);
+          resolve('텍스트 파일 처리 중 오류가 발생했습니다.');
         }
-        
-        // 전역 함수로 노출
-        window.processAudioFile = processAudioFile;
-        </script>
-    </body>
-    </html>`;
-
-    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
-
-    // 오디오 파일을 Base64로 변환
-    const audioBuffer = await fs.readFile(audioFilePath);
-    const base64Audio = audioBuffer.toString('base64');
-    
-    console.log('📊 오디오 파일 크기:', audioBuffer.length, 'bytes');
-
-    // Web Speech API로 변환 실행
-    const transcript = await page.evaluate(async (base64Data) => {
-      return await window.processAudioFile(base64Data);
-    }, base64Audio);
-
-    console.log('✅ 변환 완료:', transcript);
-    return transcript;
-
-  } catch (error) {
-    console.error('❌ Web Speech API 오류:', error.message);
-    return '음성 변환 중 오류가 발생했습니다.';
-  } finally {
-    // 브라우저 정리
-    if (browser) {
-      try {
-        await browser.close();
-        console.log('🧹 브라우저 정리 완료');
-      } catch (closeError) {
-        console.error('브라우저 종료 오류:', closeError.message);
+      } else {
+        console.error('❌ Whisper 실행 실패:', stderr);
+        resolve('음성 변환 중 오류가 발생했습니다.');
       }
-    }
-  }
+    });
+
+    whisper.on('error', (error) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      console.error('❌ Whisper 프로세스 오류:', error);
+      resolve('Whisper 실행 중 오류가 발생했습니다.');
+    });
+  });
 }
 
 // STT 변환 엔드포인트
@@ -278,8 +168,8 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       path: req.file.path
     });
 
-    // Web Speech API로 변환
-    const transcript = await transcribeWithWebSpeechAPI(tempFilePath);
+    // 로컬 Whisper로 변환
+    const transcript = await transcribeWithLocalWhisper(tempFilePath);
     
     // 성공 응답
     res.json({
@@ -287,7 +177,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       transcript: transcript,
       filename: req.file.filename,
       size: req.file.size,
-      method: 'Web Speech API',
+      method: 'Local Whisper (Tiny Model)',
       timestamp: new Date().toISOString()
     });
 
@@ -319,10 +209,12 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
 router.get('/diagnose', (req, res) => {
   res.json({
     status: 'OK',
-    message: 'Web Speech API STT 서비스가 정상 작동 중입니다.',
+    message: '로컬 Whisper STT 서비스가 정상 작동 중입니다.',
     timestamp: new Date().toISOString(),
-    method: 'Web Speech API',
-    puppeteer: 'installed'
+    method: 'Local Whisper (Tiny Model)',
+    cost: '$0 (완전 무료)',
+    model: 'whisper-tiny (39MB)',
+    features: ['한국어 지원', '상업적 사용 가능', '무제한 사용량']
   });
 });
 

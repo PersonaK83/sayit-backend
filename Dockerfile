@@ -4,55 +4,27 @@ FROM node:18-slim
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 🔧 Chrome과 Puppeteer에 필요한 패키지 설치
+# 🔧 Python과 Whisper에 필요한 최소 패키지만 설치
 RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    ca-certificates \
-    procps \
-    libxss1 \
-    # Chrome 의존성 패키지들
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libdrm2 \
-    libgtk-3-0 \
-    libgtk-4-1 \
-    libnspr4 \
-    libnss3 \
-    libxss1 \
-    libgconf-2-4 \
-    libxrandr2 \
-    libasound2 \
-    libpangocairo-1.0-0 \
-    libatk1.0-0 \
-    libcairo-gobject2 \
-    libgtk-3-0 \
-    libgdk-pixbuf2.0-0 \
-    libxcomposite1 \
-    libxcursor1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxi6 \
-    libxrender1 \
-    libxtst6 \
-    libglib2.0-0 \
-    libnss3-dev \
-    libgconf-2-4 \
-    libxss1 \
-    libappindicator1 \
-    fonts-liberation \
-    lsb-release \
-    xdg-utils \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# 🚀 Google Chrome 설치
-RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list' \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
-    && rm -rf /var/lib/apt/lists/*
+# 🚀 Python 가상환경 생성 및 Whisper 설치
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# pip 업그레이드 및 Whisper 설치
+RUN /opt/venv/bin/pip install --upgrade pip
+RUN /opt/venv/bin/pip install --no-cache-dir openai-whisper
+
+# 🔥 Whisper tiny 모델 사전 다운로드 (빌드 시 처리)
+RUN /opt/venv/bin/python -c "import whisper; whisper.load_model('tiny')"
+
+# Whisper 설치 및 모델 준비 확인
+RUN /opt/venv/bin/python -c "import whisper; print('✅ Whisper Tiny 모델 준비 완료!')"
 
 # package.json 복사 및 의존성 설치
 COPY package*.json ./
@@ -67,12 +39,9 @@ RUN mkdir -p uploads
 # 포트 노출
 EXPOSE 3000
 
-# 🔧 Puppeteer 환경 변수 설정
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
-
-# Chrome이 제대로 설치되었는지 확인
-RUN google-chrome-stable --version
+# 환경 변수 설정
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHON_PATH="/opt/venv/bin/python"
 
 # 애플리케이션 시작
 CMD ["npm", "start"]
