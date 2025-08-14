@@ -12,11 +12,14 @@ RUN apk update && apk add --no-cache \
     curl \
     python3 \
     py3-pip \
+    py3-virtualenv \
     ffmpeg \
     && rm -rf /var/cache/apk/*
 
-# OpenAI Whisper 설치
-RUN pip3 install --no-cache-dir openai-whisper
+# Python Virtual Environment 생성 및 Whisper 설치
+RUN python3 -m venv /opt/whisper-env && \
+    /opt/whisper-env/bin/pip install --no-cache-dir openai-whisper && \
+    ln -s /opt/whisper-env/bin/whisper /usr/local/bin/whisper
 
 # package.json과 package-lock.json 복사
 COPY package*.json ./
@@ -34,6 +37,9 @@ RUN mkdir -p uploads && chmod 755 uploads
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 && \
     chown -R nodejs:nodejs /app
+
+# Virtual Environment PATH 설정
+ENV PATH="/opt/whisper-env/bin:$PATH"
 
 # 비루트 사용자로 전환
 USER nodejs
