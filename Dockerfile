@@ -13,7 +13,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Python Virtual Environment 생성
+# 비루트 사용자 생성 (먼저 생성)
+RUN groupadd -r nodejs && useradd -r -g nodejs -m -d /home/nodejs nodejs
+
+# Python Virtual Environment 생성 (root 권한으로)
 RUN python3 -m venv /opt/whisper-env
 
 # Virtual Environment에서 Whisper 설치
@@ -21,6 +24,13 @@ RUN /opt/whisper-env/bin/pip install --no-cache-dir openai-whisper
 
 # whisper 명령어를 전역에서 사용 가능하도록 링크
 RUN ln -s /opt/whisper-env/bin/whisper /usr/local/bin/whisper
+
+# Whisper 모델 캐시 디렉토리 생성 및 권한 설정
+RUN mkdir -p /home/nodejs/.cache/whisper && \
+    chown -R nodejs:nodejs /home/nodejs/.cache
+
+# Virtual Environment 권한 설정
+RUN chown -R nodejs:nodejs /opt/whisper-env
 
 # package.json과 package-lock.json 복사
 COPY package*.json ./
@@ -34,12 +44,13 @@ COPY . .
 # uploads 디렉토리 생성 및 권한 설정
 RUN mkdir -p uploads && chmod 755 uploads
 
-# 비루트 사용자 생성 및 권한 설정
-RUN groupadd -r nodejs && useradd -r -g nodejs nodejs
+# 모든 앱 디렉토리 권한을 nodejs 사용자에게 부여
 RUN chown -R nodejs:nodejs /app
 
-# PATH에 Virtual Environment 추가
+# 환경 변수 설정
 ENV PATH="/opt/whisper-env/bin:$PATH"
+ENV HOME="/home/nodejs"
+ENV XDG_CACHE_HOME="/home/nodejs/.cache"
 
 # 비루트 사용자로 전환
 USER nodejs
