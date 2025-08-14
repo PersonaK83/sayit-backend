@@ -13,4 +13,11 @@ yarn-error.log*
 
 # Railway 관련 파일 (더 이상 사용하지 않음)
 railway.json
-Dockerfile
+
+# Docker 관련 파일들은 이제 Git에 포함됨
+# Dockerfile - Git에 포함
+# docker-compose.yml - Git에 포함
+# .dockerignore - Git에 포함
+
+# Windows 배치 스크립트 파일들은 제외
+scripts/*.bat

@@ -99,17 +99,55 @@ Flutter 앱에서 다음과 같이 서버 주소를 설정하세요:
 static const String _baseUrl = 'http://localhost:3000/api';
 ```
 
-## 🐳 Docker (선택사항)
+## 🐳 Docker 사용법 (권장)
 
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install --only=production
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
+### Windows PC에서 Docker로 실행
+
+#### 1. 초기 설정 (최초 1회)
+```cmd
+# 1. Git clone
+git clone <repository-url>
+cd backend_sayit
+
+# 2. 초기 설정 스크립트 실행
+scripts\setup.bat
 ```
+
+#### 2. 서버 실행
+```cmd
+# 서버 시작
+scripts\start.bat
+
+# 로그 확인
+scripts\logs.bat
+
+# 서버 중지
+scripts\stop.bat
+
+# 서버 재시작
+scripts\restart.bat
+```
+
+#### 3. 수동 Docker 명령어
+```cmd
+# Docker Compose로 빌드 및 실행
+docker-compose up --build -d
+
+# 컨테이너 상태 확인
+docker ps
+
+# 로그 확인
+docker-compose logs -f sayit-backend
+
+# 컨테이너 중지
+docker-compose down
+```
+
+### Docker 구성
+- **Dockerfile**: Node.js 18 Alpine 기반 경량 이미지
+- **docker-compose.yml**: 컨테이너 오케스트레이션
+- **nginx/nginx.conf**: 리버스 프록시 설정 (선택사항)
+- **.dockerignore**: Docker 빌드 최적화
 ```
 
 ## 🚀 서버 실행 방법
