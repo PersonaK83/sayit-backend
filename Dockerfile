@@ -1,3 +1,6 @@
+
+## 🚀 Windows
+
 # Node.js 18 Alpine 이미지 사용 (경량화)
 FROM node:18-alpine
 
@@ -7,7 +10,13 @@ WORKDIR /app
 # 시스템 패키지 업데이트 및 필요한 패키지 설치
 RUN apk update && apk add --no-cache \
     curl \
+    python3 \
+    py3-pip \
+    ffmpeg \
     && rm -rf /var/cache/apk/*
+
+# OpenAI Whisper 설치
+RUN pip3 install --no-cache-dir openai-whisper
 
 # package.json과 package-lock.json 복사
 COPY package*.json ./
