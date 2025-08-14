@@ -1,5 +1,5 @@
-# Ubuntu 기반 Node.js 이미지 사용 (Python 환경이 더 안정적)
-FROM node:18-ubuntu
+# Debian 기반 Node.js 이미지 사용 (Ubuntu와 유사하며 Python 환경이 안정적)
+FROM node:18-bullseye
 
 # 작업 디렉토리 설정
 WORKDIR /app
