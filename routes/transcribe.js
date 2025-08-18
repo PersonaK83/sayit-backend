@@ -80,7 +80,7 @@ function checkWhisperInstallation() {
   });
 }
 
-// ✅ 비동기 Whisper 변환 (백그라운드 실행)
+// ✅ 비동기 Whisper 변환 (개선된 버전)
 async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 'ko') {
   return new Promise((resolve) => {
     console.log(`🎙️ 비동기 Whisper 변환 시작 [${jobId}]...`);
@@ -94,6 +94,12 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       transcriptionJobs.set(jobId, job);
     }
     
+    // ✅ 환경 변수로 경고 메시지 숨기기
+    const env = { 
+      ...process.env, 
+      PYTHONWARNINGS: 'ignore::UserWarning'
+    };
+    
     // python3 -m whisper 명령어 사용
     const python = spawn('python3', [
       '-m', 'whisper',
@@ -101,25 +107,45 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       '--model', 'base',
       '--language', language,
       '--output_format', 'txt',
-      '--output_dir', uploadDir
-    ]);
+      '--output_dir', uploadDir,
+      '--verbose', 'False' // ✅ 불필요한 출력 줄이기
+    ], { env });
 
     let stdout = '';
     let stderr = '';
+    let hasOutput = false;
 
     python.stdout.on('data', (data) => {
       const output = data.toString();
       console.log(`Whisper 출력 [${jobId}]:`, output);
       stdout += output;
+      hasOutput = true;
     });
 
     python.stderr.on('data', (data) => {
       const error = data.toString();
-      console.log(`Whisper 로그 [${jobId}]:`, error);
-      stderr += error;
+      // ✅ FP16 경고는 무시, 실제 에러만 로깅
+      if (!error.includes('FP16 is not supported') && !error.includes('UserWarning')) {
+        console.log(`Whisper 에러 [${jobId}]:`, error);
+        stderr += error;
+      }
     });
 
+    // ✅ 타임아웃 설정 (10분 후 강제 종료)
+    const timeout = setTimeout(() => {
+      console.log(`⏰ Whisper 타임아웃 [${jobId}] - 10분 초과`);
+      python.kill('SIGTERM');
+      
+      const job = transcriptionJobs.get(jobId);
+      if (job) {
+        job.status = JobStatus.FAILED;
+        job.error = '변환 시간이 너무 오래 걸립니다 (10분 초과)';
+        transcriptionJobs.set(jobId, job);
+      }
+    }, 10 * 60 * 1000); // 10분
+
     python.on('close', async (code) => {
+      clearTimeout(timeout);
       console.log(`🏁 Whisper 종료 [${jobId}] (코드: ${code})`);
       
       const job = transcriptionJobs.get(jobId);
@@ -128,7 +154,8 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
         return resolve();
       }
       
-      if (code === 0) {
+      // ✅ 정상 종료 코드 확인 (0 또는 null도 성공으로 처리)
+      if (code === 0 || (code === null && hasOutput)) {
         try {
           // 변환된 텍스트 파일 읽기
           const audioName = path.parse(audioFilePath).name;
@@ -138,7 +165,7 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
             const transcript = await fs.readFile(textFilePath, 'utf8');
             const cleanTranscript = transcript.trim();
             
-            console.log(`✅ 변환 완료 [${jobId}]:`, cleanTranscript);
+            console.log(`✅ 변환 완료 [${jobId}] (${cleanTranscript.length}자):`, cleanTranscript.substring(0, 100) + '...');
             
             // 작업 상태 업데이트: 완료
             job.status = JobStatus.COMPLETED;
@@ -162,9 +189,9 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
           transcriptionJobs.set(jobId, job);
         }
       } else {
-        console.error(`❌ Whisper 실행 실패 [${jobId}]:`, stderr);
+        console.error(`❌ Whisper 실행 실패 [${jobId}] (코드: ${code}):`, stderr);
         job.status = JobStatus.FAILED;
-        job.error = '음성 변환 중 오류가 발생했습니다.';
+        job.error = stderr || '음성 변환 중 알 수 없는 오류가 발생했습니다.';
         transcriptionJobs.set(jobId, job);
       }
       
@@ -180,11 +207,12 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
     });
 
     python.on('error', (error) => {
+      clearTimeout(timeout);
       console.error(`❌ Whisper 프로세스 오류 [${jobId}]:`, error);
       const job = transcriptionJobs.get(jobId);
       if (job) {
         job.status = JobStatus.FAILED;
-        job.error = 'Whisper 실행 중 오류가 발생했습니다.';
+        job.error = `Whisper 실행 중 오류: ${error.message}`;
         transcriptionJobs.set(jobId, job);
       }
       resolve();
