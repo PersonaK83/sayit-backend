@@ -80,11 +80,12 @@ function checkWhisperInstallation() {
   });
 }
 
-// ✅ 비동기 Whisper 변환 (개선된 버전)
-async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 'ko') {
+// ✅ 비동기 Whisper 변환 (자동 언어 감지 지원)
+async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 'auto') {
   return new Promise((resolve) => {
     console.log(`🎙️ 비동기 Whisper 변환 시작 [${jobId}]...`);
     console.log('📁 파일 경로:', audioFilePath);
+    console.log('🌐 언어 설정:', language);
     
     // 작업 상태 업데이트: 처리 중
     const job = transcriptionJobs.get(jobId);
@@ -100,16 +101,33 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       PYTHONWARNINGS: 'ignore::UserWarning'
     };
     
-    // python3 -m whisper 명령어 사용
-    const python = spawn('python3', [
+    // Whisper 명령어 구성
+    const whisperArgs = [
       '-m', 'whisper',
       audioFilePath,
       '--model', 'base',
-      '--language', language,
       '--output_format', 'txt',
       '--output_dir', uploadDir,
-      '--verbose', 'False' // ✅ 불필요한 출력 줄이기
-    ], { env });
+      '--verbose', 'False'
+    ];
+    
+    // ✅ 언어 모드별 처리
+    if (language === 'auto') {
+      console.log('🔍 자동 언어 감지 모드 (혼합 언어 지원)');
+      // --language 옵션을 추가하지 않으면 Whisper가 자동으로 언어 감지
+    } else if (language === 'mixed') {
+      console.log('🌐 혼합 언어 전용 모드 (실험적)');
+      // 혼합 언어에 최적화된 설정
+      whisperArgs.push('--task', 'transcribe');
+    } else {
+      // 기존 단일 언어 모드
+      whisperArgs.push('--language', language);
+      console.log(`🎯 단일 언어 모드: ${language}`);
+    }
+    
+    console.log('🔧 Whisper 실행 명령어:', whisperArgs.join(' '));
+    
+    const python = spawn('python3', whisperArgs, { env });
 
     let stdout = '';
     let stderr = '';
@@ -120,102 +138,96 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       console.log(`Whisper 출력 [${jobId}]:`, output);
       stdout += output;
       hasOutput = true;
+      
+      // 진행률 업데이트 (간단한 추정)
+      const job = transcriptionJobs.get(jobId);
+      if (job && job.status === JobStatus.PROCESSING) {
+        job.progress = Math.min(job.progress + 0.1, 0.9);
+        transcriptionJobs.set(jobId, job);
+      }
     });
 
     python.stderr.on('data', (data) => {
       const error = data.toString();
-      // ✅ FP16 경고는 무시, 실제 에러만 로깅
-      if (!error.includes('FP16 is not supported') && !error.includes('UserWarning')) {
-        console.log(`Whisper 에러 [${jobId}]:`, error);
-        stderr += error;
+      if (!error.includes('UserWarning') && !error.includes('FP16')) {
+        console.log(`Whisper 로그 [${jobId}]:`, error);
       }
+      stderr += error;
     });
 
-    // ✅ 타임아웃 설정 (10분 후 강제 종료)
-    const timeout = setTimeout(() => {
-      console.log(`⏰ Whisper 타임아웃 [${jobId}] - 10분 초과`);
-      python.kill('SIGTERM');
-      
-      const job = transcriptionJobs.get(jobId);
-      if (job) {
-        job.status = JobStatus.FAILED;
-        job.error = '변환 시간이 너무 오래 걸립니다 (10분 초과)';
-        transcriptionJobs.set(jobId, job);
-      }
-    }, 10 * 60 * 1000); // 10분
-
     python.on('close', async (code) => {
-      clearTimeout(timeout);
-      console.log(`🏁 Whisper 종료 [${jobId}] (코드: ${code})`);
+      console.log(`Whisper 프로세스 종료 [${jobId}] 코드: ${code}`);
       
       const job = transcriptionJobs.get(jobId);
       if (!job) {
-        console.error(`❌ 작업을 찾을 수 없음: ${jobId}`);
-        return resolve();
+        console.log(`❌ 작업을 찾을 수 없음: ${jobId}`);
+        resolve({ success: false, error: '작업을 찾을 수 없습니다' });
+        return;
       }
-      
-      // ✅ 정상 종료 코드 확인 (0 또는 null도 성공으로 처리)
-      if (code === 0 || (code === null && hasOutput)) {
+
+      if (code === 0 && hasOutput) {
         try {
-          // 변환된 텍스트 파일 읽기
-          const audioName = path.parse(audioFilePath).name;
-          const textFilePath = path.join(uploadDir, `${audioName}.txt`);
+          // 결과 파일 읽기
+          const audioFileName = path.parse(audioFilePath).name;
+          const resultFilePath = path.join(uploadDir, `${audioFileName}.txt`);
           
-          if (await fs.pathExists(textFilePath)) {
-            const transcript = await fs.readFile(textFilePath, 'utf8');
-            const cleanTranscript = transcript.trim();
+          if (await fs.pathExists(resultFilePath)) {
+            const transcribedText = await fs.readFile(resultFilePath, 'utf8');
+            const cleanedText = transcribedText.trim();
             
-            console.log(`✅ 변환 완료 [${jobId}] (${cleanTranscript.length}자):`, cleanTranscript.substring(0, 100) + '...');
+            console.log(`✅ Whisper 변환 완료 [${jobId}]:`, cleanedText);
             
-            // 작업 상태 업데이트: 완료
+            // 작업 완료 상태 업데이트
             job.status = JobStatus.COMPLETED;
-            job.transcript = cleanTranscript || '변환된 텍스트가 없습니다.';
+            job.result = cleanedText;
             job.completedAt = Date.now();
+            job.progress = 1.0;
             transcriptionJobs.set(jobId, job);
             
-            // 텍스트 파일 삭제
-            await fs.remove(textFilePath);
+            // 임시 파일 정리
+            try {
+              await fs.remove(audioFilePath);
+              await fs.remove(resultFilePath);
+              console.log(`🧹 임시 파일 정리 완료 [${jobId}]`);
+            } catch (cleanupError) {
+              console.log(`⚠️ 파일 정리 실패 [${jobId}]:`, cleanupError.message);
+            }
             
+            resolve({ success: true, text: cleanedText });
           } else {
-            console.warn(`⚠️ 텍스트 파일을 찾을 수 없음 [${jobId}]`);
-            job.status = JobStatus.FAILED;
-            job.error = '변환된 텍스트 파일을 찾을 수 없습니다.';
-            transcriptionJobs.set(jobId, job);
+            throw new Error('결과 파일을 찾을 수 없습니다');
           }
         } catch (error) {
-          console.error(`❌ 텍스트 파일 처리 오류 [${jobId}]:`, error);
+          console.log(`❌ 결과 처리 실패 [${jobId}]:`, error.message);
           job.status = JobStatus.FAILED;
-          job.error = '텍스트 파일 처리 중 오류가 발생했습니다.';
+          job.error = error.message;
           transcriptionJobs.set(jobId, job);
+          resolve({ success: false, error: error.message });
         }
       } else {
-        console.error(`❌ Whisper 실행 실패 [${jobId}] (코드: ${code}):`, stderr);
+        // 실패 처리
+        const errorMessage = stderr || `Whisper 프로세스 실패 (코드: ${code})`;
+        console.log(`❌ Whisper 변환 실패 [${jobId}]:`, errorMessage);
+        
         job.status = JobStatus.FAILED;
-        job.error = stderr || '음성 변환 중 알 수 없는 오류가 발생했습니다.';
+        job.error = errorMessage;
         transcriptionJobs.set(jobId, job);
+        
+        resolve({ success: false, error: errorMessage });
       }
-      
-      // 임시 파일 삭제
-      try {
-        await fs.remove(audioFilePath);
-        console.log(`🧹 임시 파일 삭제 완료 [${jobId}]`);
-      } catch (cleanupError) {
-        console.error(`임시 파일 삭제 실패 [${jobId}]:`, cleanupError.message);
-      }
-      
-      resolve();
     });
 
     python.on('error', (error) => {
-      clearTimeout(timeout);
-      console.error(`❌ Whisper 프로세스 오류 [${jobId}]:`, error);
+      console.log(`❌ Whisper 프로세스 에러 [${jobId}]:`, error.message);
+      
       const job = transcriptionJobs.get(jobId);
       if (job) {
         job.status = JobStatus.FAILED;
-        job.error = `Whisper 실행 중 오류: ${error.message}`;
+        job.error = error.message;
         transcriptionJobs.set(jobId, job);
       }
-      resolve();
+      
+      resolve({ success: false, error: error.message });
     });
   });
 }
