@@ -1,6 +1,6 @@
 const Queue = require('bull');
 const redis = require('redis');
-const { transcribeWithLocalWhisperAsync } = require('../routes/transcribe');
+const { spawn } = require('child_process');
 const resultCollector = require('./result-collector');
 
 // Redis 연결 설정
@@ -23,15 +23,106 @@ console.log('🔗 Redis 연결 설정:', {
 const transcriptionQueue = new Queue('audio transcription', {
   redis: redisConfig,
   defaultJobOptions: {
-    removeOnComplete: 10,  // 완료된 작업 10개만 보관
-    removeOnFail: 50,      // 실패한 작업 50개 보관
-    attempts: 3,           // 최대 3번 재시도
+    removeOnComplete: 10,
+    removeOnFail: 50,
+    attempts: 3,
     backoff: {
       type: 'exponential',
       delay: 2000,
     },
   },
 });
+
+// 직접 Whisper 변환 함수 구현
+async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language) {
+  return new Promise((resolve) => {
+    console.log(`🎙️ Whisper 변환 시작 [${jobId}_chunk_${chunkIndex}]...`);
+    console.log('📁 청크 파일:', chunkPath);
+    console.log('🌐 언어 설정:', language);
+    
+    const whisperArgs = [
+      'whisper',
+      chunkPath,
+      '--model', 'base',
+      '--output_format', 'txt',
+      '--output_dir', '/app/temp',
+      '--verbose', 'False',
+      '--fp16', 'False',
+      '--temperature', '0',
+      '--best_of', '1'
+    ];
+
+    if (language && language !== 'auto') {
+      whisperArgs.push('--language', language);
+    }
+
+    const whisper = spawn('python', ['-m', ...whisperArgs]);
+    let output = '';
+    let errorOutput = '';
+
+    whisper.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    whisper.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    whisper.on('close', (code) => {
+      console.log(`🎯 Whisper 프로세스 종료 [${jobId}_chunk_${chunkIndex}] 코드: ${code}`);
+      
+      if (code === 0) {
+        // 결과 파일 읽기 시도
+        const fs = require('fs');
+        const path = require('path');
+        const outputFileName = path.basename(chunkPath, path.extname(chunkPath)) + '.txt';
+        const outputPath = path.join('/app/temp', outputFileName);
+        
+        try {
+          if (fs.existsSync(outputPath)) {
+            const transcript = fs.readFileSync(outputPath, 'utf8').trim();
+            console.log(`✅ 청크 변환 성공 [${jobId}_chunk_${chunkIndex}]`);
+            console.log(`📝 결과: ${transcript.substring(0, 100)}...`);
+            
+            // 임시 파일 정리
+            fs.unlinkSync(outputPath);
+            
+            resolve({
+              success: true,
+              text: transcript
+            });
+          } else {
+            console.log(`⚠️ 결과 파일 없음 [${jobId}_chunk_${chunkIndex}]: ${outputPath}`);
+            resolve({
+              success: false,
+              error: '결과 파일을 찾을 수 없습니다.'
+            });
+          }
+        } catch (error) {
+          console.error(`❌ 결과 파일 읽기 실패 [${jobId}_chunk_${chunkIndex}]:`, error);
+          resolve({
+            success: false,
+            error: error.message
+          });
+        }
+      } else {
+        console.error(`❌ Whisper 변환 실패 [${jobId}_chunk_${chunkIndex}]:`, errorOutput);
+        resolve({
+          success: false,
+          error: `Whisper 프로세스 실패 (코드: ${code})`
+        });
+      }
+    });
+
+    whisper.on('error', (error) => {
+      console.error(`💥 Whisper 프로세스 에러 [${jobId}_chunk_${chunkIndex}]:`, error);
+      resolve({
+        success: false,
+        error: error.message
+      });
+    });
+  });
+}
 
 // 청크 처리 작업 정의 (동시 5개 청크 처리)
 transcriptionQueue.process('chunk', 5, async (job) => {
@@ -41,8 +132,8 @@ transcriptionQueue.process('chunk', 5, async (job) => {
   console.log(`📁 청크 파일: ${chunkPath}`);
   
   try {
-    // 청크 변환 처리 (기존 Whisper 함수 재사용)
-    const result = await transcribeWithLocalWhisperAsync(chunkPath, `${jobId}_chunk_${chunkIndex}`, language);
+    // 직접 구현한 변환 함수 사용
+    const result = await transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language);
     
     if (!result.success) {
       throw new Error(result.error || '청크 변환 실패');
