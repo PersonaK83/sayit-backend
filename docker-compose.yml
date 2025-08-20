@@ -24,21 +24,19 @@ services:
       - sayit-network
     depends_on:
       - redis
-    # ✅ 메모리 및 CPU 제한 추가
     deploy:
       resources:
         limits:
-          memory: 4G
-          cpus: '2.0'
+          memory: 4G        # WSL2 6GB 중 4GB 할당
+          cpus: '3'         # 4 프로세서 중 3개 할당
         reservations:
-          memory: 2G
-          cpus: '1.0'
+          memory: 2G        # 최소 2GB 보장
+          cpus: '2'         # 최소 2 프로세서 보장
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
     logging:
       driver: "json-file"
       options:
@@ -55,27 +53,19 @@ services:
       - redis_data:/data
     networks:
       - sayit-network
-    # ✅ Redis 메모리 설정 개선
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
-    # ✅ 메모리 overcommit 설정
-    sysctls:
-      - vm.overcommit_memory=1
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '0.5'
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+          memory: 1.5G      # WSL2 6GB 중 1.5GB 할당
+          cpus: '1'         # 4 프로세서 중 1개 할당
+        reservations:
+          memory: 512M      # 최소 512MB 보장
+          cpus: '0.5'       # 최소 0.5 프로세서 보장
+    command: redis-server --appendonly yes --maxmemory 1024mb --maxmemory-policy allkeys-lru --save 60 1000
 
 volumes:
   backend_logs:
-    driver: local
   redis_data:
-    driver: local
 
 networks:
   sayit-network:
