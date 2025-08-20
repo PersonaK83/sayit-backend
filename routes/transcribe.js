@@ -432,39 +432,65 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     const shouldUseAsync = isAsync || req.file.size > fileSizeThreshold;
 
     if (shouldUseAsync) {
-      // 🔄 비동기 처리 (큰 파일용)
-      const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
-      // 작업 등록
-      transcriptionJobs.set(jobId, {
-        id: jobId,
-        status: JobStatus.PENDING,
-        originalFilename: req.file.originalname,
-        filename: req.file.filename,
-        filePath: tempFilePath,
-        language: language,
-        fileSize: req.file.size,
-        createdAt: Date.now(),
-        startedAt: null,
-        completedAt: null,
-        transcript: null,
-        error: null
-      });
-      
-      console.log(`🔄 비동기 작업 등록: ${jobId}`);
-      
-      // 백그라운드에서 변환 실행
-      transcribeWithLocalWhisperAsync(tempFilePath, jobId, language);
-      
-      // 즉시 jobId 반환
-      res.json({
-        success: true,
-        jobId: jobId,
-        status: JobStatus.PENDING,
-        message: '변환 작업이 시작되었습니다. 상태를 확인하려면 /api/transcribe/status/{jobId}를 호출하세요.',
-        estimatedTime: Math.ceil(req.file.size / (10 * 1024)) + 30 // 10KB당 1초 + 30초 기본
-      });
-      
+      // 큐 시스템으로 처리
+      try {
+        const { jobId: queueJobId } = await queueAudioTranscription(tempFilePath, language);
+        
+        // 기존 작업 등록 방식과 연동
+        transcriptionJobs.set(queueJobId, {
+          id: queueJobId,
+          status: JobStatus.PROCESSING,
+          originalFilename: req.file.originalname,
+          filename: req.file.filename,
+          filePath: tempFilePath,
+          language: language,
+          fileSize: req.file.size,
+          createdAt: Date.now(),
+          startedAt: Date.now(),
+          completedAt: null,
+          transcript: null,
+          error: null
+        });
+        
+        console.log(`🔄 큐 시스템 작업 등록: ${queueJobId}`);
+        
+        // 즉시 jobId 반환
+        res.json({
+          success: true,
+          jobId: queueJobId,
+          status: JobStatus.PROCESSING,
+          message: '변환 작업이 큐에 등록되었습니다. 상태를 확인하려면 /api/transcribe/status/{jobId}를 호출하세요.',
+          estimatedTime: Math.ceil(req.file.size / (10 * 1024)) + 30
+        });
+        
+      } catch (error) {
+        console.error('큐 시스템 등록 실패:', error);
+        // 기존 방식으로 폴백
+        const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        transcriptionJobs.set(jobId, {
+          id: jobId,
+          status: JobStatus.PENDING,
+          originalFilename: req.file.originalname,
+          filename: req.file.filename,
+          filePath: tempFilePath,
+          language: language,
+          fileSize: req.file.size,
+          createdAt: Date.now(),
+          startedAt: null,
+          completedAt: null,
+          transcript: null,
+          error: null
+        });
+        transcribeWithLocalWhisperAsync(tempFilePath, jobId, language);
+        
+        res.json({
+          success: true,
+          jobId: jobId,
+          status: JobStatus.PENDING,
+          message: '변환 작업이 시작되었습니다.',
+          estimatedTime: Math.ceil(req.file.size / (10 * 1024)) + 30
+        });
+      }
     } else {
       // ⚡ 동기 처리 (작은 파일용)
       console.log('⚡ 동기 처리 모드 (작은 파일)');
