@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 
 // 큐 시스템 import 추가
 const { queueAudioTranscription } = require('../services/audio-processor');
+const resultCollector = require('../services/result-collector');
 
 const router = express.Router();
 
@@ -653,6 +654,47 @@ router.get('/status/:jobId', async (req, res) => {
     
   } catch (error) {
     res.status(500).json({ error: '상태 확인 실패' });
+  }
+});
+
+// 큐 시스템 완료 이벤트 처리 (파일 하단에 추가)
+resultCollector.on('completed', (data) => {
+  const { jobId, result, totalChunks, processingTime } = data;
+  
+  console.log(`🎯 큐 시스템 작업 완료 [${jobId}]`);
+  console.log(`📊 처리 시간: ${Math.round(processingTime / 1000)}초`);
+  console.log(`📝 최종 결과: ${result.length}자`);
+  
+  // 기존 작업 상태 업데이트
+  const job = transcriptionJobs.get(jobId);
+  if (job) {
+    job.status = JobStatus.COMPLETED;
+    job.completedAt = Date.now();
+    job.transcript = result;
+    job.error = null;
+    transcriptionJobs.set(jobId, job);
+    
+    console.log(`✅ 작업 상태 업데이트 완료 [${jobId}]: ${JobStatus.COMPLETED}`);
+  } else {
+    console.warn(`⚠️ 작업 ID를 찾을 수 없음: ${jobId}`);
+  }
+});
+
+// 큐 시스템 실패 이벤트 처리
+resultCollector.on('failed', (data) => {
+  const { jobId, error } = data;
+  
+  console.log(`❌ 큐 시스템 작업 실패 [${jobId}]: ${error}`);
+  
+  // 기존 작업 상태 업데이트
+  const job = transcriptionJobs.get(jobId);
+  if (job) {
+    job.status = JobStatus.FAILED;
+    job.completedAt = Date.now();
+    job.error = error;
+    transcriptionJobs.set(jobId, job);
+    
+    console.log(`❌ 작업 상태 업데이트 완료 [${jobId}]: ${JobStatus.FAILED}`);
   }
 });
 
