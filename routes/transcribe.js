@@ -4,6 +4,9 @@ const fs = require('fs-extra');
 const path = require('path');
 const { spawn } = require('child_process');
 
+// 큐 시스템 import 추가
+const { queueAudioTranscription } = require('../services/audio-processor');
+
 const router = express.Router();
 
 // ✅ 작업 상태 관리 (메모리 기반)
