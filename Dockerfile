@@ -32,17 +32,17 @@ RUN mkdir -p /home/nodejs/.cache/whisper && \
 # Virtual Environment 권한 설정
 RUN chown -R nodejs:nodejs /opt/whisper-env
 
-# package.json과 package-lock.json 복사
-COPY package*.json ./
+# package.json 복사
+COPY package.json ./
 
-# 의존성 설치 (프로덕션 모드)
-RUN npm ci --only=production && npm cache clean --force
+# 의존성 설치 (npm install 사용하여 package-lock.json 자동 생성)
+RUN npm install --only=production && npm cache clean --force
 
 # 애플리케이션 소스 복사
 COPY . .
 
-# uploads 디렉토리 생성 및 권한 설정
-RUN mkdir -p uploads && chmod 755 uploads
+# uploads 및 temp 디렉토리 생성 및 권한 설정
+RUN mkdir -p uploads temp && chmod 755 uploads temp
 
 # 모든 앱 디렉토리 권한을 nodejs 사용자에게 부여
 RUN chown -R nodejs:nodejs /app
