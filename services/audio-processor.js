@@ -19,13 +19,14 @@ async function splitAudioFile(audioFilePath, chunkDuration = 120) { // 2분 청�
   
   return new Promise((resolve, reject) => {
     ffmpeg(audioFilePath)
-      .inputOptions('-f mp3') // 또는 입력 형식에 맞게
+      // 입력 형식을 자동 감지하도록 수정
       .outputOptions([
         '-f segment',
         `-segment_time ${chunkDuration}`,
         '-segment_format mp3',
         '-reset_timestamps 1',
-        '-c copy' // 재인코딩 없이 복사 (속도 향상)
+        '-acodec libmp3lame', // AAC를 MP3로 변환
+        '-ab 128k' // 비트레이트 설정
       ])
       .output(path.join(outputDir, 'chunk_%03d.mp3'))
       .on('start', (commandLine) => {
@@ -49,7 +50,7 @@ async function splitAudioFile(audioFilePath, chunkDuration = 120) { // 2분 청�
           
           console.log(`📋 생성된 청크: ${chunkFiles.length}개`);
           chunkFiles.forEach((file, index) => {
-            console.log(`   ${index + 1}. ${path.basename(file)}`);
+            console.log(`   청크 ${index + 1}: ${path.basename(file)}`);
           });
           
           resolve({ jobId, chunkFiles, outputDir });
