@@ -299,6 +299,61 @@ async function transcribeWithLocalWhisper(audioFilePath) {
   });
 }
 
+
+
+// 파일 길이 체크 함수
+async function checkAudioDuration(filePath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) reject(err);
+      else resolve(metadata.format.duration);
+    });
+  });
+}
+
+// 업로드 엔드포인트에 제한 추가
+router.post('/upload', upload.single('audio'), async (req, res) => {
+  try {
+    const audioFile = req.file;
+    if (!audioFile) {
+      return res.status(400).json({ error: '오디오 파일이 필요합니다.' });
+    }
+    
+    // 파일 길이 체크
+    const duration = await checkAudioDuration(audioFile.path);
+    const maxDuration = 30 * 60; // 30분
+    
+    if (duration > maxDuration) {
+      // 임시 파일 삭제
+      fs.unlinkSync(audioFile.path);
+      
+      return res.status(413).json({
+        error: '파일이 너무 깁니다.',
+        message: '30분 이하의 오디오 파일만 처리 가능합니다.',
+        duration: Math.round(duration / 60),
+        maxDuration: 30,
+        premiumRequired: true
+      });
+    }
+    
+    // 큐 시스템으로 처리
+    const { jobId } = await queueAudioTranscription(audioFile.path, req.body.language);
+    
+    res.json({
+      success: true,
+      jobId,
+      message: '변환 작업이 큐에 등록되었습니다.',
+      estimatedTime: Math.ceil(duration / 60 * 0.3) // 예상 처리 시간
+    });
+    
+  } catch (error) {
+    console.error('업로드 처리 실패:', error);
+    res.status(500).json({ error: '서버 오류가 발생했습니다.' });
+  }
+});
+
+
+
 // ✅ STT 변환 엔드포인트 (폴링 지원)
 router.post('/transcribe', upload.single('audio'), async (req, res) => {
   let tempFilePath = null;
@@ -506,6 +561,38 @@ router.get('/diagnose', async (req, res) => {
       '로컬 Whisper가 설치되어 실제 음성 변환이 가능합니다.' : 
       'pip3 install openai-whisper 명령어로 Whisper를 설치해주세요.'
   });
+});
+
+// 작업 상태 확인
+router.get('/status/:jobId', async (req, res) => {
+  const { jobId } = req.params;
+  
+  try {
+    // 큐에서 작업 상태 확인
+    const jobs = await transcriptionQueue.getJobs(['waiting', 'active', 'completed', 'failed']);
+    const jobStatus = jobs.filter(job => job.data.jobId === jobId);
+    
+    if (jobStatus.length === 0) {
+      return res.status(404).json({ error: '작업을 찾을 수 없습니다.' });
+    }
+    
+    const totalJobs = jobStatus.length;
+    const completedJobs = jobStatus.filter(job => job.finishedOn).length;
+    const failedJobs = jobStatus.filter(job => job.failedReason).length;
+    
+    res.json({
+      jobId,
+      status: completedJobs === totalJobs ? 'completed' : 'processing',
+      progress: (completedJobs / totalJobs) * 100,
+      totalChunks: totalJobs,
+      completedChunks: completedJobs,
+      failedChunks: failedJobs,
+      estimatedTimeRemaining: (totalJobs - completedJobs) * 30 // 청크당 30초 예상
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: '상태 확인 실패' });
+  }
 });
 
 module.exports = router;
