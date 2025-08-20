@@ -656,7 +656,7 @@ router.get('/status/:jobId', async (req, res) => {
   }
 });
 
-module.exports = {
-  router,
-  transcribeWithLocalWhisperAsync
-};
+module.exports = router;
+
+// 함수를 별도로 export
+module.exports.transcribeWithLocalWhisperAsync = transcribeWithLocalWhisperAsync;
