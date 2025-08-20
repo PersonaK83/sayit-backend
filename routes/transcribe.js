@@ -95,20 +95,25 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       transcriptionJobs.set(jobId, job);
     }
     
-    // ✅ 환경 변수로 경고 메시지 숨기기
+    // ✅ 환경 변수로 경고 메시지 숨기기 + 메모리 최적화
     const env = { 
       ...process.env, 
-      PYTHONWARNINGS: 'ignore::UserWarning'
+      PYTHONWARNINGS: 'ignore::UserWarning',
+      OMP_NUM_THREADS: '2',  // OpenMP 스레드 제한
+      MKL_NUM_THREADS: '2'   // Intel MKL 스레드 제한
     };
     
-    // Whisper 명령어 구성
+    // ✅ Whisper 명령어 구성 (AAC 파일 지원 개선)
     const whisperArgs = [
       '-m', 'whisper',
       audioFilePath,
       '--model', 'base',
       '--output_format', 'txt',
       '--output_dir', uploadDir,
-      '--verbose', 'False'
+      '--verbose', 'False',
+      '--fp16', 'False',  // FP16 비활성화로 메모리 안정성 향상
+      '--temperature', '0',  // 온도 0으로 설정하여 안정성 향상
+      '--best_of', '1'  // 단일 디코딩으로 메모리 절약
     ];
     
     // ✅ 언어 모드별 처리
@@ -127,11 +132,33 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
     
     console.log('🔧 Whisper 실행 명령어:', whisperArgs.join(' '));
     
-    const python = spawn('python3', whisperArgs, { env });
+    // ✅ 프로세스 스폰 옵션 개선
+    const python = spawn('python3', whisperArgs, { 
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+      // ✅ 메모리 제한 설정
+      maxBuffer: 1024 * 1024 * 10 // 10MB 버퍼 제한
+    });
 
     let stdout = '';
     let stderr = '';
     let hasOutput = false;
+
+    // ✅ 프로세스 타임아웃 설정 (5분)
+    const timeout = setTimeout(() => {
+      console.log(`⏰ Whisper 프로세스 타임아웃 [${jobId}]`);
+      python.kill('SIGKILL');
+      
+      const job = transcriptionJobs.get(jobId);
+      if (job) {
+        job.status = JobStatus.FAILED;
+        job.error = 'Processing timeout (5 minutes)';
+        transcriptionJobs.set(jobId, job);
+      }
+      
+      resolve({ success: false, error: 'Processing timeout' });
+    }, 5 * 60 * 1000); // 5분 타임아웃
 
     python.stdout.on('data', (data) => {
       const output = data.toString();
@@ -149,13 +176,17 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
 
     python.stderr.on('data', (data) => {
       const error = data.toString();
-      if (!error.includes('UserWarning') && !error.includes('FP16')) {
+      // ✅ 불필요한 경고 메시지 필터링
+      if (!error.includes('UserWarning') && 
+          !error.includes('FP16') && 
+          !error.includes('TensorFloat-32')) {
         console.log(`Whisper 로그 [${jobId}]:`, error);
       }
       stderr += error;
     });
 
     python.on('close', async (code) => {
+      clearTimeout(timeout); // 타임아웃 클리어
       console.log(`Whisper 프로세스 종료 [${jobId}] 코드: ${code}`);
       
       const job = transcriptionJobs.get(jobId);
@@ -218,6 +249,7 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
     });
 
     python.on('error', (error) => {
+      clearTimeout(timeout);
       console.log(`❌ Whisper 프로세스 에러 [${jobId}]:`, error.message);
       
       const job = transcriptionJobs.get(jobId);
