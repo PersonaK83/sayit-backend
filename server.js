@@ -8,6 +8,10 @@ require('dotenv').config();
 const transcribeRoutes = require('./routes/transcribe');
 const { errorHandler, notFound } = require('./middleware/errorMiddleware');
 
+// 큐 시스템 초기화 (중요!)
+const transcriptionQueue = require('./services/transcription-queue');
+const resultCollector = require('./services/result-collector');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0'; // 모든 IP에서 접근 허용
@@ -81,12 +85,27 @@ app.use(notFound);
 app.use(errorHandler);
 
 // 서버 시작 (모든 IP에서 접근 허용)
-app.listen(PORT, HOST, () => {
+app.listen(PORT, HOST, async () => {
   console.log(`🚀 SayIt 백엔드 서버가 실행 중입니다!`);
   console.log(`📍 서버 주소: http://${HOST}:${PORT}`);
   console.log(`🌐 로컬 접근: http://localhost:${PORT}`);
   console.log(`📱 모바일 접근: http://[실제IP]:${PORT}`);
   console.log(`🔧 환경: ${process.env.NODE_ENV || 'development'}`);
+  
+  // 큐 시스템 상태 확인
+  try {
+    console.log('\n🔗 큐 시스템 초기화 중...');
+    const waiting = await transcriptionQueue.getWaiting();
+    const active = await transcriptionQueue.getActive();
+    const completed = await transcriptionQueue.getCompleted();
+    const failed = await transcriptionQueue.getFailed();
+    
+    console.log(`✅ Redis 큐 시스템 연결 성공!`);
+    console.log(`📊 큐 상태: 대기 ${waiting.length}, 진행 ${active.length}, 완료 ${completed.length}, 실패 ${failed.length}`);
+  } catch (error) {
+    console.error('❌ 큐 시스템 초기화 실패:', error.message);
+    console.error('🔧 Redis 연결을 확인해주세요.');
+  }
   
   // 네트워크 정보 출력
   const os = require('os');
@@ -124,12 +143,26 @@ app.listen(PORT, HOST, () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('🛑 서버 종료 신호를 받았습니다. Graceful shutdown 중...');
+  
+  // 큐 시스템 정리
+  if (transcriptionQueue) {
+    console.log('🔄 큐 시스템 종료 중...');
+    await transcriptionQueue.close();
+  }
+  
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('🛑 서버 종료 신호를 받았습니다. Graceful shutdown 중...');
+  
+  // 큐 시스템 정리
+  if (transcriptionQueue) {
+    console.log('🔄 큐 시스템 종료 중...');
+    await transcriptionQueue.close();
+  }
+  
   process.exit(0);
 }); 

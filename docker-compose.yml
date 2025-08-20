@@ -27,11 +27,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4G        # WSL2 6GB 중 4GB 할당
-          cpus: '3'         # 4 프로세서 중 3개 할당
+          memory: 4G
         reservations:
-          memory: 2G        # 최소 2GB 보장
-          cpus: '2'         # 최소 2 프로세서 보장
+          memory: 2G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
@@ -53,15 +51,14 @@ services:
       - redis_data:/data
     networks:
       - sayit-network
+    # Windows에서 문제가 되는 sysctls 설정 제거
     deploy:
       resources:
         limits:
-          memory: 1.5G      # WSL2 6GB 중 1.5GB 할당
-          cpus: '1'         # 4 프로세서 중 1개 할당
+          memory: 1G
         reservations:
-          memory: 512M      # 최소 512MB 보장
-          cpus: '0.5'       # 최소 0.5 프로세서 보장
-    command: redis-server --appendonly yes --maxmemory 1024mb --maxmemory-policy allkeys-lru --save 60 1000
+          memory: 512M
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
 
 volumes:
   backend_logs:
