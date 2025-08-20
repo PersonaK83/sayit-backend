@@ -14,11 +14,16 @@ services:
       - PORT=3000
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ALLOWED_ORIGINS=*
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - ./uploads:/app/uploads
+      - ./temp:/app/temp
       - backend_logs:/app/logs
     networks:
       - sayit-network
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 30s
@@ -30,6 +35,24 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ✅ Redis 서비스 추가
+  redis:
+    image: redis:7-alpine
+    container_name: sayit-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - sayit-network
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   # Nginx 리버스 프록시 (선택사항 - 필요시 주석 해제)
   # nginx:
@@ -47,6 +70,8 @@ services:
 
 volumes:
   backend_logs:
+    driver: local
+  redis_data:
     driver: local
 
 networks:
