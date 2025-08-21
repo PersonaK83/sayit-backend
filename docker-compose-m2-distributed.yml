@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # API Gateway & 로드밸런서
+  api-gateway:
+    build: 
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: sayit-gateway-m2
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis-cluster
+      - WORKER_NODES=worker-1,worker-2,worker-3
+      - PLATFORM=arm64
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    networks:
+      - sayit-network
+    depends_on:
+      - redis-cluster
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Whisper 워커 1 (M2 최적화)
+  whisper-worker-1:
+    build: 
+      context: .
+      dockerfile: Dockerfile.m2
+    container_name: sayit-worker-1-m2
+    restart: unless-stopped
+    environment:
+      - WORKER_ID=m2-worker-1
+      - REDIS_HOST=redis-cluster
+      - MAX_CONCURRENT_CHUNKS=3
+      - PLATFORM=arm64
+      - PYTORCH_ENABLE_MPS_FALLBACK=1
+      - OMP_NUM_THREADS=2
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'
+    volumes:
+      - ./uploads:/app/uploads
+      - ./temp:/app/temp
+      - whisper_cache_1:/tmp/whisper
+    networks:
+      - sayit-network
+    depends_on:
+      - redis-cluster
+
+  # Whisper 워커 2
+  whisper-worker-2:
+    build: 
+      context: .
+      dockerfile: Dockerfile.m2
+    container_name: sayit-worker-2-m2
+    restart: unless-stopped
+    environment:
+      - WORKER_ID=m2-worker-2
+      - REDIS_HOST=redis-cluster
+      - MAX_CONCURRENT_CHUNKS=3
+      - PLATFORM=arm64
+      - PYTORCH_ENABLE_MPS_FALLBACK=1
+      - OMP_NUM_THREADS=2
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'
+    volumes:
+      - ./uploads:/app/uploads
+      - ./temp:/app/temp
+      - whisper_cache_2:/tmp/whisper
+    networks:
+      - sayit-network
+    depends_on:
+      - redis-cluster
+
+  # Whisper 워커 3
+  whisper-worker-3:
+    build: 
+      context: .
+      dockerfile: Dockerfile.m2
+    container_name: sayit-worker-3-m2
+    restart: unless-stopped
+    environment:
+      - WORKER_ID=m2-worker-3
+      - REDIS_HOST=redis-cluster
+      - MAX_CONCURRENT_CHUNKS=2
+      - PLATFORM=arm64
+      - PYTORCH_ENABLE_MPS_FALLBACK=1
+      - OMP_NUM_THREADS=2
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: '2'
+        reservations:
+          memory: 1.5G
+          cpus: '1'
+    volumes:
+      - ./uploads:/app/uploads
+      - ./temp:/app/temp
+      - whisper_cache_3:/tmp/whisper
+    networks:
+      - sayit-network
+    depends_on:
+      - redis-cluster
+
+  # Redis 클러스터 (M2 최적화)
+  redis-cluster:
+    image: redis:7-alpine
+    container_name: sayit-redis-m2
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    volumes:
+      - redis_data:/data
+    networks:
+      - sayit-network
+    command: redis-server --maxmemory 1536mb --maxmemory-policy allkeys-lru --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 모니터링 (선택사항)
+  monitoring:
+    image: prom/node-exporter:latest
+    container_name: sayit-monitoring
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    networks:
+      - sayit-network
+
+volumes:
+  redis_data:
+  whisper_cache_1:
+  whisper_cache_2:
+  whisper_cache_3:
+
+networks:
+  sayit-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16 

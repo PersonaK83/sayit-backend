@@ -1,0 +1,25 @@
+ # Dockerfile.gateway (API Gateway용)
+FROM --platform=linux/arm64 node:18-alpine
+
+WORKDIR /app
+
+# 필요한 패키지 설치
+RUN apk add --no-cache curl
+
+# Node.js 의존성 설치
+COPY package*.json ./
+RUN npm ci --only=production && npm cache clean --force
+
+# Gateway 코드 복사
+COPY gateway/ ./gateway/
+COPY middleware/ ./middleware/
+
+# 포트 노출
+EXPOSE 3000
+
+# 헬스체크
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3000/api/health || exit 1
+
+# Gateway 시작
+CMD ["node", "gateway/server.js"]

@@ -1,0 +1,27 @@
+# M2 분산처리용 환경 변수
+
+# OpenAI API 키
+OPENAI_API_KEY=your_openai_api_key_here
+
+# 서버 설정
+NODE_ENV=production
+PORT=3000
+ALLOWED_ORIGINS=*
+
+# Redis 설정 (분산처리용)
+REDIS_HOST=redis-cluster
+REDIS_PORT=6379
+
+# M2 최적화 설정
+PLATFORM=arm64
+MAX_CONCURRENT_CHUNKS=8
+WHISPER_CACHE_DIR=/tmp/whisper
+
+# 워커 설정
+WORKER_POOL_SIZE=3
+CHUNK_DURATION=90
+MAX_FILE_SIZE_MB=100
+
+# 성능 최적화
+PYTORCH_ENABLE_MPS_FALLBACK=1
+OMP_NUM_THREADS=6
