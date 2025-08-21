@@ -1,42 +1,21 @@
-#!/bin/bash
-# scripts/fix-gateway.sh
+# Gateway 완전 중지 및 제거
+docker stop sayit-gateway-m2
+docker rm sayit-gateway-m2
 
-echo "🔧 Gateway 문제 해결 시작..."
+# 워커 1을 포트 3000으로 직접 연결
+docker run -d \
+  --name sayit-direct-backend \
+  -p 3000:3000 \
+  --network sayit-backend_sayit-network \
+  -e REDIS_HOST=sayit-redis-m2 \
+  -e WORKER_ID=direct-worker \
+  -e NODE_ENV=production \
+  -v $(pwd)/uploads:/app/uploads \
+  -v $(pwd)/temp:/app/temp \
+  sayit-backend-whisper-worker-1:latest
 
-cd /Users/hyemoonjung/backend_server/nodejs/backend_sayit
+echo "🚀 워커를 직접 포트 3000에 연결 완료!"
 
-# 1. Gateway 디렉토리 생성
-echo "📁 Gateway 디렉토리 생성 중..."
-mkdir -p gateway
-
-# 2. Gateway 서버 파일 생성 (위의 코드)
-echo "📝 Gateway 서버 파일 생성 중..."
-# (위의 gateway/server.js 내용을 여기에 삽입)
-
-# 3. axios 의존성 추가
-echo "📦 의존성 설치 중..."
-npm install axios
-
-# 4. Gateway 재빌드
-echo "🔨 Gateway 재빌드 중..."
-docker stop sayit-gateway-m2 2>/dev/null
-docker rm sayit-gateway-m2 2>/dev/null
-docker-compose -f docker-compose-m2-distributed.yml build api-gateway
-
-# 5. Gateway 재시작
-echo "🚀 Gateway 재시작 중..."
-docker-compose -f docker-compose-m2-distributed.yml up -d api-gateway
-
-# 6. 상태 확인
-echo "⏳ 시작 대기 중..."
-sleep 30
-
-echo "✅ Gateway 수정 완료!"
-echo "📊 최종 상태:"
+# 10초 대기 후 상태 확인
+sleep 10
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-echo "🧪 연결 테스트:"
-curl -s http://localhost:3000/api/health
-EOF
-
-chmod +x scripts/fix-gateway.sh
