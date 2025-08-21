@@ -1,4 +1,4 @@
- # Dockerfile.m2 (ARM64 최적화)
+ # Dockerfile.m2 (ARM64 최적화) - 수정 버전
 FROM --platform=linux/arm64 node:18-bullseye
 
 # 작업 디렉토리 설정
@@ -34,9 +34,9 @@ RUN chown -R nodejs:nodejs /opt/whisper-env
 RUN mkdir -p /home/nodejs/.cache/whisper && \
     chown -R nodejs:nodejs /home/nodejs/.cache
 
-# Node.js 의존성 설치
+# Node.js 의존성 설치 (npm install 사용)
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+RUN npm install --only=production && npm cache clean --force
 
 # 애플리케이션 코드 복사
 COPY . .

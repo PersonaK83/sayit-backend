@@ -1,4 +1,4 @@
- # Dockerfile.gateway (API Gateway용)
+ # Dockerfile.gateway (API Gateway용) - 수정 버전
 FROM --platform=linux/arm64 node:18-alpine
 
 WORKDIR /app
@@ -6,13 +6,12 @@ WORKDIR /app
 # 필요한 패키지 설치
 RUN apk add --no-cache curl
 
-# Node.js 의존성 설치
+# Node.js 의존성 설치 (npm install 사용)
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
+RUN npm install --only=production && npm cache clean --force
 
-# Gateway 코드 복사
-COPY gateway/ ./gateway/
-COPY middleware/ ./middleware/
+# 애플리케이션 코드 복사
+COPY . .
 
 # 포트 노출
 EXPOSE 3000
