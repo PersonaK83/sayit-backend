@@ -856,7 +856,7 @@ apply_file_based_redis_fix() {
     echo "✅ 파일 기반 Redis 시스템 적용 완료!"
 }
 
-# Redis 수동 테스트 함수
+# Redis 수동 테스트 함수 (수정)
 test_redis_manually() {
     echo "🧪 Redis 수동 테스트 실행 중..."
     
@@ -875,9 +875,9 @@ async function testRedis() {
     await redisClient.connect();
     console.log('✅ Redis 연결 성공');
     
-    // 테스트 완료 신호 저장
+    // 테스트 완료 신호 저장 (템플릿 리터럴 대신 문자열 연결 사용)
     const testJobId = 'job_1755848055335_796e0448';
-    const completedKey = `completed:${testJobId}`;
+    const completedKey = 'completed:' + testJobId;
     const completedData = {
       jobId: testJobId,
       chunkIndex: 0,
