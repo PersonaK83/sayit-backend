@@ -144,8 +144,9 @@ transcriptionQueue.process('chunk', 5, async (job) => {
     console.log(`✅ 청크 처리 완료 [${jobId}] ${chunkIndex + 1}/${totalChunks} (${progress.toFixed(1)}%)`);
     console.log(`📝 청크 결과: ${result.text?.substring(0, 100)}...`);
     
-    // 🎯 Redis를 통한 결과 전달 (기존 방식 대체)
-    await redisResultBridge.sendChunkResult(jobId, chunkIndex, result.text);
+    // 🎯 Redis를 통한 결과 전달 (기존 resultCollector 대체)
+    const redisResultBridge = require('./redis-result-bridge');
+    await redisResultBridge.saveChunkResult(jobId, chunkIndex, result.text);
     
     return {
       chunkIndex,
@@ -158,7 +159,7 @@ transcriptionQueue.process('chunk', 5, async (job) => {
     console.error(`❌ 청크 처리 실패 [${jobId}] ${chunkIndex + 1}/${totalChunks}:`, error.message);
     
     // 실패한 청크도 Redis로 전달
-    await redisResultBridge.sendChunkResult(jobId, chunkIndex, `[청크 ${chunkIndex + 1} 처리 실패]`);
+    await redisResultBridge.saveChunkResult(jobId, chunkIndex, `[청크 ${chunkIndex + 1} 처리 실패]`);
     
     throw error;
   }

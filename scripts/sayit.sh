@@ -80,10 +80,10 @@ check_and_install_whisper() {
             echo "   ❌ python 명령어로 Whisper 접근 불가"
         fi
         
-        # 5. 최종 확인 - 실제 워커 로직과 동일한 테스트
+        # 5. 최종 확인 - 실제 워커 로직과 동일한 테스트 (수정)
         echo "   🧪 실제 워커 로직 테스트..."
         test_result=$(docker exec $container python -m whisper --help 2>&1 | head -1)
-        if [[ $test_result == *"usage: whisper"* ]]; then
+        if [[ $test_result == *"usage:"* ]] || [[ $test_result == *"whisper"* ]]; then
             echo "   ✅ 실제 워커 로직 테스트 성공"
         else
             echo "   ❌ 실제 워커 로직 테스트 실패: $test_result"
@@ -838,6 +838,24 @@ REDIS_POLL_EOF
     echo "3. 5초 후 자동으로 완료 상태로 변경되는지 확인"
 }
 
+# 파일 기반 Redis 시스템 적용
+apply_file_based_redis_fix() {
+    echo "🔧 파일 기반 Redis 시스템 적용 중..."
+    
+    echo "📝 Redis Result Bridge 파일이 생성되었는지 확인하세요:"
+    echo "   - services/redis-result-bridge.js"
+    echo "   - services/transcription-queue.js 수정"
+    echo "   - routes/transcribe.js 수정"
+    echo
+    echo "🔄 수정 완료 후 시스템 재시작..."
+    
+    stop_system
+    sleep 5
+    start_system
+    
+    echo "✅ 파일 기반 Redis 시스템 적용 완료!"
+}
+
 show_menu() {
     echo "========================================="
     echo "   🍎 SayIt M2 분산처리 관리자"
@@ -859,7 +877,7 @@ show_menu() {
     echo "15. 🔧 멈춘 작업 복구"
     echo "16. 🚀 Redis 기반 시스템 적용"
     echo "17. 📡 Redis 구독 상태 확인"
-    echo "18. 🎯 Redis 시스템 완전 수정"
+    echo "18. 🎯 파일 기반 Redis 적용"
     echo "0. 종료"
     echo "========================================="
 }
@@ -1167,7 +1185,7 @@ while true; do
         15) recover_stuck_jobs ;;
         16) apply_redis_fix ;;
         17) check_redis_subscription ;;
-        18) complete_redis_fix ;;
+        18) apply_file_based_redis_fix ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac

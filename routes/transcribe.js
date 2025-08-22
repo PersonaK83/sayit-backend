@@ -462,7 +462,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
           error: null
         });
         
-        console.log(`�� Redis 기반 큐 시스템 작업 등록: ${queueJobId}`);
+        console.log(`✅ Redis 기반 큐 시스템 작업 등록: ${queueJobId}`);
         
         res.json({
           success: true,
@@ -698,6 +698,36 @@ redisResultBridge.on('failed', (data) => {
     transcriptionJobs.set(jobId, job);
   }
 });
+
+// 🎯 Redis 기반 결과 확인 시스템 (기존 이벤트 리스너 대체)
+async function checkRedisResults() {
+  try {
+    const completedResults = await redisResultBridge.checkCompletedJobs();
+    
+    for (const data of completedResults) {
+      const { jobId, result } = data;
+      
+      // transcriptionJobs 상태 업데이트
+      const job = transcriptionJobs.get(jobId);
+      if (job && job.status === JobStatus.PROCESSING) {
+        job.status = JobStatus.COMPLETED;
+        job.completedAt = Date.now();
+        job.transcript = result;
+        job.error = null;
+        transcriptionJobs.set(jobId, job);
+        
+        console.log(`✅ Redis 폴링: 작업 완료 처리 [${jobId}]`);
+        console.log(`📝 최종 결과: ${result}`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Redis 결과 확인 실패:', error);
+  }
+}
+
+// 5초마다 Redis 결과 확인
+setInterval(checkRedisResults, 5000);
+console.log('✅ Redis 폴링 시스템 시작 (5초 간격)');
 
 module.exports = router;
 
