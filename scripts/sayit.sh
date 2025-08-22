@@ -546,6 +546,165 @@ check_redis_subscription() {
     docker logs sayit-direct-backend --tail 5 | grep -E "(테스트|Redis|수신)"
 }
 
+# Redis 구독 문제 진단 및 수정
+fix_redis_subscription() {
+    echo "🔧 Redis 구독 문제 진단 및 수정 중..."
+    
+    # 1. Direct Backend 컨테이너 내부에서 Redis 구독 테스트
+    echo "🧪 Direct Backend Redis 연결 테스트..."
+    docker exec sayit-direct-backend node -e "
+const redis = require('redis');
+
+async function testRedis() {
+  try {
+    console.log('🔗 Redis 클라이언트 생성 중...');
+    const client = redis.createClient({
+      host: 'sayit-redis-m2',
+      port: 6379
+    });
+    
+    console.log('📡 Redis 연결 중...');
+    await client.connect();
+    console.log('✅ Redis 연결 성공');
+    
+    console.log('📋 Redis 정보 확인...');
+    const info = await client.info();
+    console.log('📊 Redis 상태: 연결됨');
+    
+    await client.quit();
+    console.log('✅ Redis 연결 테스트 완료');
+    
+  } catch (error) {
+    console.error('❌ Redis 연결 실패:', error.message);
+  }
+}
+
+testRedis();
+" 2>/dev/null || echo "❌ Redis 연결 테스트 실패"
+    
+    # 2. 현재 routes/transcribe.js에 Redis 구독이 추가되었는지 확인
+    echo "📝 Redis 구독 코드 확인 중..."
+    redis_listener_exists=$(grep -c "setupRedisResultListener" routes/transcribe.js 2>/dev/null || echo "0")
+    
+    if [ "$redis_listener_exists" -eq "0" ]; then
+        echo "❌ Redis 구독 코드가 추가되지 않았습니다."
+        echo "🔧 Redis 구독 코드 추가 중..."
+        
+        # Redis 구독 코드를 routes/transcribe.js에 추가
+        cat >> routes/transcribe.js << 'REDIS_SUB_EOF'
+
+// 🎯 Redis 기반 결과 수신 시스템
+const redis = require('redis');
+
+async function setupRedisResultListener() {
+  try {
+    console.log('🔗 Redis 결과 구독 시스템 초기화 중...');
+    
+    const subscriber = redis.createClient({
+      host: process.env.REDIS_HOST || 'sayit-redis-m2',
+      port: process.env.REDIS_PORT || 6379
+    });
+
+    await subscriber.connect();
+    console.log('✅ Redis 구독자 연결 성공');
+    
+    await subscriber.subscribe('chunk-results', (message) => {
+      try {
+        const { jobId, chunkIndex, result } = JSON.parse(message);
+        console.log(`📥 Redis에서 청크 결과 수신 [${jobId}] 청크 ${chunkIndex}`);
+        console.log(`📝 수신된 결과: ${result?.substring(0, 100)}...`);
+        
+        // transcriptionJobs 상태 업데이트
+        const job = transcriptionJobs.get(jobId);
+        if (job) {
+          job.status = JobStatus.COMPLETED;
+          job.completedAt = Date.now();
+          job.transcript = result;
+          job.error = null;
+          transcriptionJobs.set(jobId, job);
+          
+          console.log(`✅ Redis 기반 작업 상태 업데이트 완료 [${jobId}]: ${JobStatus.COMPLETED}`);
+        } else {
+          console.warn(`⚠️ Redis 수신: 작업 ID를 찾을 수 없음: ${jobId}`);
+        }
+      } catch (parseError) {
+        console.error('❌ Redis 메시지 파싱 실패:', parseError);
+      }
+    });
+
+    console.log('✅ Redis 결과 구독 리스너 설정 완료');
+  } catch (error) {
+    console.error('❌ Redis 구독 설정 실패:', error);
+  }
+}
+
+// Redis 리스너 시작
+setupRedisResultListener();
+REDIS_SUB_EOF
+        
+        echo "✅ Redis 구독 코드 추가 완료"
+    else
+        echo "✅ Redis 구독 코드 이미 존재"
+    fi
+    
+    # 3. transcription-queue.js에 Redis 전송 코드 추가
+    echo "🔧 transcription-queue.js Redis 전송 코드 확인 중..."
+    
+    # 기존 resultCollector 호출을 찾아서 Redis 전송으로 교체
+    if grep -q "resultCollector.collectChunkResult" services/transcription-queue.js; then
+        echo "🔄 resultCollector를 Redis 전송으로 교체 중..."
+        
+        # 임시 파일 생성
+        cat > /tmp/redis-fix.js << 'TEMP_FIX_EOF'
+    // 🎯 Redis를 통한 결과 전달 (기존 resultCollector 대체)
+    try {
+      const redis = require('redis');
+      const redisClient = redis.createClient({
+        host: process.env.REDIS_HOST || 'sayit-redis-m2',
+        port: process.env.REDIS_PORT || 6379
+      });
+      
+      await redisClient.connect();
+      
+      const message = {
+        jobId,
+        chunkIndex,
+        result: result.text,
+        timestamp: Date.now()
+      };
+      
+      await redisClient.publish('chunk-results', JSON.stringify(message));
+      console.log(`📡 Redis로 청크 결과 전송 [${jobId}] 청크 ${chunkIndex}`);
+      await redisClient.quit();
+    } catch (redisError) {
+      console.error(`❌ Redis 결과 전송 실패:`, redisError);
+    }
+TEMP_FIX_EOF
+        
+        # resultCollector 호출 부분을 Redis 전송으로 교체
+        sed -i.bak '/resultCollector\.collectChunkResult/r /tmp/redis-fix.js' services/transcription-queue.js
+        sed -i.bak '/resultCollector\.collectChunkResult/d' services/transcription-queue.js
+        
+        echo "✅ Redis 전송 코드 교체 완료"
+        rm /tmp/redis-fix.js
+    else
+        echo "✅ resultCollector 호출이 이미 수정됨"
+    fi
+    
+    # 4. 시스템 재시작
+    echo "🔄 Redis 기반 시스템 재시작 중..."
+    stop_system
+    sleep 5
+    start_system
+    
+    echo "✅ Redis 기반 결과 전달 시스템 적용 완료!"
+    echo
+    echo "🧪 테스트 방법:"
+    echo "1. 17번 메뉴로 Redis 구독 상태 확인"
+    echo "2. 앱에서 비동기 변환 테스트"
+    echo "3. 11번 메뉴로 디버깅 확인"
+}
+
 show_menu() {
     echo "========================================="
     echo "   🍎 SayIt M2 분산처리 관리자"
@@ -564,7 +723,7 @@ show_menu() {
     echo "12. 📊 작업 상태 조회"
     echo "13. 🔗 워커 연결 확인"
     echo "14. 📡 Result Collector 디버깅"
-    echo "15. 🔧 멈춘 작업 복구"
+    echo "15. 🔧 멀춘 작업 복구"
     echo "16. 🚀 Redis 기반 시스템 적용"
     echo "17. 📡 Redis 구독 상태 확인"
     echo "0. 종료"
