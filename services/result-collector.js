@@ -1,5 +1,5 @@
 const EventEmitter = require('events');
-const { cleanupTempFiles } = require('./audio-processor');
+const cleanupTempFiles = require('./cleanup-utils');
 
 class TranscriptionCollector extends EventEmitter {
   constructor() {
