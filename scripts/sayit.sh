@@ -124,47 +124,81 @@ check_and_clean_queue() {
     fi
 }
 
-# 비동기 작업 디버깅 함수
+# 비동기 작업 디버깅 함수 (개선)
 debug_async_jobs() {
     echo "🔍 비동기 작업 디버깅 시작..."
     
-    # 1. Redis 큐 상태 상세 확인
+    # 1. Redis 큐 상태 간단 확인
     echo "📊 Redis 큐 상태:"
-    docker exec sayit-redis-m2 redis-cli eval "
-        local keys = redis.call('keys', '*bull*')
-        for i=1,#keys do
-            local key = keys[i]
-            local type = redis.call('type', key)['ok']
-            if type == 'hash' then
-                local data = redis.call('hgetall', key)
-                print(key .. ': ' .. table.concat(data, ', '))
-            elseif type == 'list' then
-                local len = redis.call('llen', key)
-                print(key .. ': ' .. len .. ' items')
-            end
-        end
-        return 'done'
-    " 0 2>/dev/null || echo "Redis 키 조회 실패"
+    docker exec sayit-redis-m2 redis-cli info | grep -E "connected_clients|used_memory"
+    docker exec sayit-redis-m2 redis-cli keys "*bull*" | wc -l | xargs echo "Bull 키 개수:"
     
     # 2. Direct Backend에서 transcriptionJobs 상태 확인
     echo
-    echo "📋 Direct Backend 작업 상태 확인:"
-    docker exec sayit-direct-backend curl -s http://localhost:3000/api/transcribe/jobs 2>/dev/null || echo "작업 목록 API 없음"
+    echo "📋 Direct Backend 작업 상태:"
+    curl -s http://localhost:3000/api/transcribe/jobs 2>/dev/null || echo "작업 목록 API 호출 실패"
     
-    # 3. 각 워커의 최근 로그 확인
+    # 3. 각 워커의 상세 로그 확인
     echo
-    echo "⚡ 워커별 최근 처리 로그:"
+    echo "⚡ 워커별 상세 처리 로그:"
     for worker in sayit-worker-1-m2 sayit-worker-2-m2 sayit-worker-3-m2; do
         if docker ps --format "{{.Names}}" | grep -q "$worker"; then
-            echo "--- $worker ---"
-            docker logs $worker --tail 5 2>/dev/null | grep -E "(청크 처리|Whisper|완료|실패)"
+            echo "--- $worker (최근 10줄) ---"
+            docker logs $worker --tail 10 2>/dev/null | grep -E "(청크|Whisper|완료|실패|결과|collect)"
         fi
     done
     
-    # 4. Result Collector 이벤트 확인
+    # 4. Direct Backend의 Result Collector 관련 로그
     echo
-    echo "📡 Result Collector 이벤트 상태:"
-    docker logs sayit-direct-backend --tail 20 | grep -E "(completed|failed|이벤트|상태 업데이트)"
+    echo "📡 Result Collector 관련 로그:"
+    docker logs sayit-direct-backend --tail 30 2>/dev/null | grep -E "(completed|failed|이벤트|상태 업데이트|Result Collector|collectChunkResult)"
+    
+    # 5. 현재 진행 중인 작업의 상세 상태
+    echo
+    echo "🎯 진행 중인 작업 상세 분석:"
+    active_jobs=$(curl -s http://localhost:3000/api/transcribe/jobs | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for job in data.get('jobs', []):
+        if job.get('status') == 'processing':
+            print(f\"작업 ID: {job.get('id')}\")
+            print(f\"상태: {job.get('status')}\")
+            print(f\"시작 시간: {job.get('startedAt')}\")
+            print(f\"파일: {job.get('originalFilename')}\")
+except:
+    pass
+" 2>/dev/null)
+    
+    if [ -n "$active_jobs" ]; then
+        echo "$active_jobs"
+    else
+        echo "진행 중인 작업 없음"
+    fi
+}
+
+# 워커 연결 상태 확인 함수
+check_worker_connections() {
+    echo "🔗 워커-Redis 연결 상태 확인..."
+    
+    for worker in sayit-worker-1-m2 sayit-worker-2-m2 sayit-worker-3-m2; do
+        if docker ps --format "{{.Names}}" | grep -q "$worker"; then
+            echo "--- $worker ---"
+            
+            # Redis 연결 확인
+            redis_test=$(docker exec $worker redis-cli -h sayit-redis-m2 ping 2>/dev/null || echo "FAIL")
+            echo "Redis 연결: $redis_test"
+            
+            # 큐 연결 확인
+            queue_test=$(docker logs $worker --tail 50 2>/dev/null | grep -E "(큐 시스템|Redis 연결)" | tail -1)
+            echo "큐 상태: $queue_test"
+            
+            # 최근 작업 처리 상태
+            recent_work=$(docker logs $worker --tail 20 2>/dev/null | grep -E "(청크 처리|작업)" | tail -2)
+            echo "최근 작업: $recent_work"
+            echo
+        fi
+    done
 }
 
 # 작업 상태 강제 확인 함수
@@ -198,6 +232,7 @@ show_menu() {
     echo "10. 📊 Whisper 모델 확인"
     echo "11. 🔍 비동기 작업 디버깅"
     echo "12. 📊 작업 상태 조회"
+    echo "13. 🔗 워커 연결 확인"
     echo "0. 종료"
     echo "========================================="
 }
@@ -481,7 +516,7 @@ except Exception as e:
     done
 }
 
-# 메인 루프
+# 메인 루프 업데이트
 while true; do
     show_menu
     read -p "선택하세요 (0-9): " choice
@@ -499,6 +534,7 @@ while true; do
         10) check_whisper_models ;;
         11) debug_async_jobs ;;
         12) check_job_status ;;
+        13) check_worker_connections ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
