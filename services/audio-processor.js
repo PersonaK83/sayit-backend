@@ -2,7 +2,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const fs = require('fs').promises;
 const transcriptionQueue = require('./transcription-queue');
-// const resultCollector = require('./result-collector'); // ❌ 제거
+// ❌ result-collector import 완전 제거
 const { generateJobId, formatFileSize, formatDuration } = require('./utils');
 
 // 오디오 파일 분할

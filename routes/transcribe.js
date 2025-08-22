@@ -4,10 +4,9 @@ const fs = require('fs-extra');
 const path = require('path');
 const { spawn } = require('child_process');
 
-// 큐 시스템 import 추가
-const { queueAudioTranscription } = require('../services/audio-processor');
-// const resultCollector = require('../services/result-collector'); // ❌ 완전 제거
-const redisResultBridge = require('../services/redis-result-bridge'); // ✅ Redis만 사용
+// ❌ 임시로 audio-processor import 제거 (circular dependency 해결)
+// const { queueAudioTranscription } = require('../services/audio-processor');
+const redisResultBridge = require('../services/redis-result-bridge');
 
 const router = express.Router();
 
