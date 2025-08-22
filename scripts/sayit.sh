@@ -3,60 +3,76 @@
 
 COMPOSE_FILE="docker-compose-m2-distributed.yml"
 
-# Whisper 설치 확인 및 자동 설치 함수
+# Whisper 설치 확인 및 자동 설치 함수 (개선)
 check_and_install_whisper() {
-    echo "🔍 Whisper 설치 상태 확인 중..."
+    echo "🔍 모든 백엔드 컨테이너 Whisper 설치 상태 확인 중..."
     
-    # 실행 중인 모든 워커 컨테이너 찾기
-    workers=$(docker ps --format "{{.Names}}" | grep -E "(worker|backend)" | grep -v gateway)
+    # 실행 중인 모든 백엔드 관련 컨테이너 찾기
+    all_backends=$(docker ps --format "{{.Names}}" | grep -E "(worker|backend|direct)" | grep -v gateway)
     
-    if [ -z "$workers" ]; then
-        echo "⚠️ 실행 중인 워커 컨테이너가 없습니다."
+    if [ -z "$all_backends" ]; then
+        echo "⚠️ 실행 중인 백엔드 컨테이너가 없습니다."
         return 1
     fi
     
-    echo "📋 발견된 워커들: $(echo $workers | tr '\n' ' ')"
+    echo "📋 발견된 백엔드 컨테이너들:"
+    echo "$all_backends" | sed 's/^/   - /'
+    echo
     
-    for worker in $workers; do
-        echo "🔧 [$worker] Whisper 확인 중..."
+    for container in $all_backends; do
+        echo "🔧 [$container] Whisper 확인 및 설치..."
+        
+        # 컨테이너 상태 확인
+        if ! docker exec $container echo "alive" > /dev/null 2>&1; then
+            echo "❌ [$container] 컨테이너 접근 불가"
+            continue
+        fi
         
         # Whisper 설치 확인
-        if docker exec $worker which whisper > /dev/null 2>&1; then
-            echo "✅ [$worker] Whisper 이미 설치됨"
+        if docker exec $container which whisper > /dev/null 2>&1; then
+            echo "✅ [$container] Whisper 이미 설치됨"
+            # Whisper 버전 확인
+            whisper_version=$(docker exec $container whisper --help 2>/dev/null | head -1 | grep -o "whisper" || echo "설치됨")
+            echo "   📦 상태: $whisper_version"
         else
-            echo "📦 [$worker] Whisper 설치 중..."
+            echo "📦 [$container] Whisper 설치 시작..."
             
-            # Python 확인
-            if ! docker exec $worker which python3 > /dev/null 2>&1; then
-                echo "🐍 [$worker] Python3 설치 중..."
-                docker exec -u root $worker bash -c "
+            # Python3 확인 및 설치
+            if ! docker exec $container which python3 > /dev/null 2>&1; then
+                echo "   🐍 Python3 설치 중..."
+                docker exec -u root $container bash -c "
                     apt-get update -qq && 
-                    apt-get install -y python3-pip -qq
-                " || {
-                    echo "❌ [$worker] Python3 설치 실패"
+                    apt-get install -y python3-pip python3-venv -qq
+                " > /dev/null 2>&1 || {
+                    echo "   ❌ Python3 설치 실패"
                     continue
                 }
             fi
             
             # Whisper 설치
-            echo "🎙️ [$worker] OpenAI Whisper 설치 중..."
-            docker exec -u root $worker bash -c "
+            echo "   🎙️ OpenAI Whisper 설치 중..."
+            docker exec -u root $container bash -c "
                 pip3 install openai-whisper --quiet
-            " || {
-                echo "❌ [$worker] Whisper 설치 실패"
+            " > /dev/null 2>&1 || {
+                echo "   ❌ Whisper 설치 실패"
                 continue
             }
             
             # 설치 확인
-            if docker exec $worker which whisper > /dev/null 2>&1; then
-                echo "✅ [$worker] Whisper 설치 완료"
+            if docker exec $container which whisper > /dev/null 2>&1; then
+                echo "   ✅ Whisper 설치 완료"
             else
-                echo "❌ [$worker] Whisper 설치 확인 실패"
+                echo "   ❌ Whisper 설치 확인 실패"
             fi
         fi
+        
+        # Python 경로 확인
+        python_path=$(docker exec $container which python3 2>/dev/null || echo "없음")
+        echo "   🐍 Python 경로: $python_path"
+        echo
     done
     
-    echo "🎯 모든 워커 Whisper 설치 확인 완료!"
+    echo "🎯 모든 백엔드 컨테이너 Whisper 설치 확인 완료!"
 }
 
 # 큐 시스템 상태 확인 및 정리
@@ -69,15 +85,22 @@ check_and_clean_queue() {
         return 1
     fi
     
-    # 실패한 작업 수 확인
-    failed_jobs=$(docker exec sayit-redis-m2 redis-cli eval "return #redis.call('keys', 'bull:audio transcription:failed')" 0 2>/dev/null || echo "0")
+    # 큐 상태 확인
+    echo "📊 현재 큐 상태:"
+    docker exec sayit-redis-m2 redis-cli info | grep -E "connected_clients|used_memory_human"
     
-    if [ "$failed_jobs" -gt 0 ]; then
-        echo "🧹 실패한 작업 $failed_jobs개 정리 중..."
-        docker exec sayit-redis-m2 redis-cli FLUSHDB > /dev/null
-        echo "✅ 큐 정리 완료"
+    # 실패한 작업 확인
+    failed_count=$(docker exec sayit-redis-m2 redis-cli keys "*:failed" 2>/dev/null | wc -l)
+    
+    if [ "$failed_count" -gt 0 ]; then
+        echo "🧹 실패한 작업 $failed_count개 발견. 정리하시겠습니까? (y/N)"
+        read -p "선택: " clean_choice
+        if [[ $clean_choice =~ ^[Yy]$ ]]; then
+            docker exec sayit-redis-m2 redis-cli FLUSHDB > /dev/null
+            echo "✅ 큐 정리 완료"
+        fi
     else
-        echo "✅ 큐 상태 정상"
+        echo "✅ 큐 상태 정상 (실패한 작업 없음)"
     fi
 }
 
@@ -121,13 +144,6 @@ start_system() {
     echo "⏳ 시스템 초기화 대기 중..."
     sleep 20
     
-    # Whisper 자동 설치 확인
-    echo "🔧 Whisper 설치 상태 자동 확인..."
-    check_and_install_whisper
-    
-    # 큐 시스템 정리
-    check_and_clean_queue
-    
     # Gateway 상태 확인
     if docker ps --format "{{.Names}}" | grep -q "sayit-gateway-m2"; then
         if docker ps | grep "sayit-gateway-m2" | grep -q "Restarting"; then
@@ -140,6 +156,15 @@ start_system() {
         echo "❌ Gateway 시작 실패. 워커를 직접 연결합니다..."
         fix_gateway_direct
     fi
+    
+    # Whisper 자동 설치 확인 (시스템 시작 후)
+    echo
+    echo "🔧 모든 백엔드 컨테이너 Whisper 설치 상태 자동 확인..."
+    check_and_install_whisper
+    
+    # 큐 시스템 정리
+    echo
+    check_and_clean_queue
     
     show_final_status
 }
@@ -163,17 +188,32 @@ fix_gateway_direct() {
       -v $(pwd)/temp:/app/temp \
       sayit-backend-whisper-worker-1:latest
     
-    sleep 10
+    echo "⏳ 직접 백엔드 시작 대기 중..."
+    sleep 15
     
-    # 직접 연결된 백엔드에도 Whisper 설치 확인
+    # 직접 연결된 백엔드에 Whisper 설치 확인 (강화)
     echo "🔧 직접 연결된 백엔드 Whisper 확인..."
-    if ! docker exec sayit-direct-backend which whisper > /dev/null 2>&1; then
+    if docker exec sayit-direct-backend which whisper > /dev/null 2>&1; then
+        echo "✅ 직접 백엔드 Whisper 이미 설치됨"
+    else
         echo "📦 직접 백엔드에 Whisper 설치 중..."
         docker exec -u root sayit-direct-backend bash -c "
+            echo '🐍 Python3 설치 중...' &&
             apt-get update -qq && 
-            apt-get install -y python3-pip -qq && 
-            pip3 install openai-whisper --quiet
-        "
+            apt-get install -y python3-pip python3-venv -qq &&
+            echo '🎙️ Whisper 설치 중...' &&
+            pip3 install openai-whisper --quiet &&
+            echo '✅ 설치 완료'
+        " || {
+            echo "❌ 직접 백엔드 Whisper 설치 실패"
+        }
+        
+        # 설치 확인
+        if docker exec sayit-direct-backend which whisper > /dev/null 2>&1; then
+            echo "✅ 직접 백엔드 Whisper 설치 확인 완료"
+        else
+            echo "❌ 직접 백엔드 Whisper 설치 실패"
+        fi
     fi
     
     echo "✅ 워커 직접 연결 완료!"
@@ -215,6 +255,18 @@ show_status() {
         echo "❌ API 연결 실패"
     fi
     
+    # Whisper 설치 상태 확인
+    echo
+    echo "🎙️ Whisper 설치 상태:"
+    all_backends=$(docker ps --format "{{.Names}}" | grep -E "(worker|backend|direct)")
+    for container in $all_backends; do
+        if docker exec $container which whisper > /dev/null 2>&1; then
+            echo "   ✅ $container: 설치됨"
+        else
+            echo "   ❌ $container: 미설치"
+        fi
+    done
+    
     # 접속 정보
     local_ip=$(ifconfig | grep "inet " | grep -v 127.0.0.1 | head -1 | awk '{print $2}')
     echo
@@ -235,14 +287,21 @@ show_final_status() {
 show_logs() {
     echo "📋 로그 옵션:"
     echo "1. 전체 로그"
-    echo "2. 백엔드 로그"
+    echo "2. 직접 백엔드 로그"
     echo "3. 워커 로그"
     echo "4. Redis 로그"
-    read -p "선택하세요 (1-4): " log_choice
+    echo "5. Gateway 로그"
+    read -p "선택하세요 (1-5): " log_choice
     
     case $log_choice in
         1) docker-compose -f $COMPOSE_FILE logs --tail=50 ;;
-        2) docker logs sayit-direct-backend --tail=50 2>/dev/null || echo "❌ 직접 백엔드가 실행되지 않음" ;;
+        2) 
+            if docker ps --format "{{.Names}}" | grep -q "sayit-direct-backend"; then
+                docker logs sayit-direct-backend --tail=50
+            else
+                echo "❌ 직접 백엔드가 실행되지 않음"
+            fi
+            ;;
         3) 
             echo "=== Worker 1 ==="
             docker logs sayit-worker-1-m2 --tail=20 2>/dev/null
@@ -252,6 +311,7 @@ show_logs() {
             docker logs sayit-worker-3-m2 --tail=20 2>/dev/null
             ;;
         4) docker logs sayit-redis-m2 --tail=30 ;;
+        5) docker logs sayit-gateway-m2 --tail=20 2>/dev/null || echo "❌ Gateway 실행되지 않음" ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
 }
@@ -271,6 +331,28 @@ test_connection() {
     # 진단 API
     echo "🔍 시스템 진단:"
     curl -s http://localhost:3000/api/diagnose | python3 -m json.tool 2>/dev/null || curl -s http://localhost:3000/api/diagnose
+    
+    # STT 테스트 (간단한 파일로)
+    echo
+    echo "🎙️ STT 기능 테스트:"
+    if [ -f "./temp/voice-test.wav" ]; then
+        echo "📁 테스트 파일로 STT 변환 테스트 중..."
+        curl -X POST http://localhost:3000/api/transcribe \
+          -F "audio=@./temp/voice-test.wav;type=audio/wav" \
+          -F "language=auto" \
+          -s | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(f\"   ✅ STT 테스트: {data.get('success', False)}\")
+    print(f\"   📝 방식: {data.get('method', 'Unknown')}\")
+    print(f\"   🎙️ Whisper: {data.get('whisperInstalled', False)}\")
+except:
+    print('   ❌ STT 테스트 실패')
+"
+    else
+        echo "   ⚠️ 테스트 파일 없음 (./temp/voice-test.wav)"
+    fi
 }
 
 # 메인 루프
