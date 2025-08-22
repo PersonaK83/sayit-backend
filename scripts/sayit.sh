@@ -856,6 +856,67 @@ apply_file_based_redis_fix() {
     echo "✅ 파일 기반 Redis 시스템 적용 완료!"
 }
 
+# Redis 수동 테스트 함수
+test_redis_manually() {
+    echo "🧪 Redis 수동 테스트 실행 중..."
+    
+    # 1. 테스트 파일 생성 및 실행
+    docker exec sayit-direct-backend node -e "
+const redis = require('redis');
+
+async function testRedis() {
+  try {
+    console.log('🔗 Redis 연결 중...');
+    const redisClient = redis.createClient({
+      host: 'sayit-redis-m2',
+      port: 6379
+    });
+    
+    await redisClient.connect();
+    console.log('✅ Redis 연결 성공');
+    
+    // 테스트 완료 신호 저장
+    const testJobId = 'job_1755848055335_796e0448';
+    const completedKey = `completed:${testJobId}`;
+    const completedData = {
+      jobId: testJobId,
+      chunkIndex: 0,
+      result: '우선 제조 원가와 며칠 원가에 대해 알아보겠습니다.',
+      timestamp: Date.now()
+    };
+    
+    await redisClient.set(completedKey, JSON.stringify(completedData));
+    console.log('📡 테스트 완료 신호 저장 완료');
+    
+    // 즉시 확인
+    const keys = await redisClient.keys('completed:*');
+    console.log('📋 completed 키들:', keys);
+    
+    for (const key of keys) {
+      const data = await redisClient.get(key);
+      console.log('📝 데이터:', key, '→', data);
+    }
+    
+    await redisClient.quit();
+    
+  } catch (error) {
+    console.error('❌ Redis 테스트 실패:', error);
+  }
+}
+
+testRedis();
+" 2>/dev/null
+    
+    echo "✅ Redis 수동 테스트 완료"
+    
+    # 2. 10초 후 상태 확인
+    echo "⏳ 10초 후 자동 폴링 결과 확인..."
+    sleep 10
+    
+    # 작업 상태 재확인
+    curl -s "http://localhost:3000/api/transcribe/status/job_1755848055335_796e0448" | python3 -m json.tool 2>/dev/null
+}
+
 show_menu() {
     echo "========================================="
     echo "   🍎 SayIt M2 분산처리 관리자"
@@ -878,6 +939,7 @@ show_menu() {
     echo "16. 🚀 Redis 기반 시스템 적용"
     echo "17. 📡 Redis 구독 상태 확인"
     echo "18. 🎯 파일 기반 Redis 적용"
+    echo "19. 🧪 Redis 수동 테스트"
     echo "0. 종료"
     echo "========================================="
 }
@@ -1186,6 +1248,7 @@ while true; do
         16) apply_redis_fix ;;
         17) check_redis_subscription ;;
         18) apply_file_based_redis_fix ;;
+        19) test_redis_manually ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
