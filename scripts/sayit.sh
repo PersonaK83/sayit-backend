@@ -28,14 +28,19 @@ check_and_install_whisper() {
             continue
         fi
         
-        # Whisper 설치 확인
-        if docker exec $container which whisper > /dev/null 2>&1; then
-            echo "✅ [$container] Whisper 이미 설치됨"
-            # Whisper 버전 확인
-            whisper_version=$(docker exec $container whisper --help 2>/dev/null | head -1 | grep -o "whisper" || echo "설치됨")
-            echo "   📦 상태: $whisper_version"
+        # 🎯 transcribe.js와 동일한 방식으로 Whisper 확인
+        echo "   🔍 Python whisper 모듈 확인 중..."
+        if docker exec $container python3 -c "import whisper; print('installed')" > /dev/null 2>&1; then
+            echo "   ✅ Whisper Python 모듈 정상 설치됨"
+            
+            # 추가로 바이너리도 확인
+            if docker exec $container which whisper > /dev/null 2>&1; then
+                echo "   ✅ Whisper 바이너리도 설치됨"
+            else
+                echo "   ⚠️ Whisper 바이너리 없음 (Python 모듈만 있음)"
+            fi
         else
-            echo "📦 [$container] Whisper 설치 시작..."
+            echo "   📦 Whisper 설치 시작..."
             
             # Python3 확인 및 설치
             if ! docker exec $container which python3 > /dev/null 2>&1; then
@@ -49,30 +54,68 @@ check_and_install_whisper() {
                 }
             fi
             
-            # Whisper 설치
+            # Whisper 설치 (더 안전한 방법)
             echo "   🎙️ OpenAI Whisper 설치 중..."
             docker exec -u root $container bash -c "
-                pip3 install openai-whisper --quiet
+                echo '🔧 pip 업그레이드 중...' &&
+                pip3 install --upgrade pip --quiet &&
+                echo '📦 Whisper 설치 중...' &&
+                pip3 install openai-whisper --quiet &&
+                echo '🔗 PATH 설정 중...' &&
+                ln -sf /usr/local/bin/whisper /usr/bin/whisper 2>/dev/null || true
             " > /dev/null 2>&1 || {
                 echo "   ❌ Whisper 설치 실패"
                 continue
             }
             
-            # 설치 확인
-            if docker exec $container which whisper > /dev/null 2>&1; then
-                echo "   ✅ Whisper 설치 완료"
+            # 🎯 transcribe.js와 동일한 방식으로 설치 확인
+            echo "   🔍 설치 확인 중..."
+            if docker exec $container python3 -c "import whisper; print('installed')" > /dev/null 2>&1; then
+                echo "   ✅ Whisper Python 모듈 설치 확인 완료"
             else
-                echo "   ❌ Whisper 설치 확인 실패"
+                echo "   ❌ Whisper Python 모듈 설치 실패"
+                
+                # 디버깅 정보
+                echo "   🔍 디버깅 정보:"
+                docker exec $container python3 -c "import sys; print('Python path:', sys.path)" 2>/dev/null || echo "   Python 실행 실패"
+                docker exec $container pip3 list | grep -i whisper || echo "   pip list에서 whisper 없음"
             fi
         fi
         
-        # Python 경로 확인
-        python_path=$(docker exec $container which python3 2>/dev/null || echo "없음")
-        echo "   🐍 Python 경로: $python_path"
         echo
     done
     
     echo "🎯 모든 백엔드 컨테이너 Whisper 설치 확인 완료!"
+    
+    # 최종 API 진단 테스트
+    echo "🧪 API 진단 재테스트..."
+    if curl -s http://localhost:3000/api/diagnose > /dev/null 2>&1; then
+        diagnose_result=$(curl -s http://localhost:3000/api/diagnose)
+        whisper_status=$(echo "$diagnose_result" | grep -o '"whisperInstalled":[^,]*' | cut -d: -f2)
+        echo "📊 API 진단 결과: whisperInstalled = $whisper_status"
+        
+        if [ "$whisper_status" = "false" ]; then
+            echo "❌ 여전히 Whisper 미설치로 감지됨. 추가 디버깅 필요"
+            echo "🔍 컨테이너 내부 Python 환경 확인..."
+            docker exec sayit-direct-backend python3 -c "
+import sys
+print('Python executable:', sys.executable)
+print('Python version:', sys.version)
+try:
+    import whisper
+    print('✅ Whisper 모듈 import 성공')
+    print('Whisper location:', whisper.__file__)
+except ImportError as e:
+    print('❌ Whisper 모듈 import 실패:', e)
+except Exception as e:
+    print('❌ 기타 오류:', e)
+"
+        else
+            echo "✅ Whisper 정상 설치 확인됨"
+        fi
+    else
+        echo "❌ API 진단 호출 실패"
+    fi
 }
 
 # 큐 시스템 상태 확인 및 정리
@@ -353,6 +396,51 @@ except:
     else
         echo "   ⚠️ 테스트 파일 없음 (./temp/voice-test.wav)"
     fi
+}
+
+# 메뉴에 "🔍 Whisper 디버깅" 옵션 추가
+debug_whisper() {
+    echo "🔍 Whisper 설치 디버깅 시작..."
+    
+    containers=$(docker ps --format "{{.Names}}" | grep -E "(worker|backend|direct)")
+    
+    for container in $containers; do
+        echo "========== [$container] 디버깅 =========="
+        
+        # Python 경로 확인
+        echo "🐍 Python 정보:"
+        docker exec $container which python3
+        docker exec $container python3 --version
+        
+        # pip 정보
+        echo "📦 pip 정보:"
+        docker exec $container which pip3
+        docker exec $container pip3 --version
+        
+        # Whisper 바이너리 확인
+        echo "🎙️ Whisper 바이너리:"
+        docker exec $container which whisper || echo "바이너리 없음"
+        
+        # Python 모듈 확인 (transcribe.js와 동일)
+        echo "🔍 Python 모듈 확인:"
+        docker exec $container python3 -c "
+try:
+    import whisper
+    print('✅ Whisper 모듈 import 성공')
+    print('📍 Whisper 위치:', whisper.__file__)
+    print('📝 Whisper 버전:', getattr(whisper, '__version__', 'Unknown'))
+except ImportError as e:
+    print('❌ Whisper 모듈 import 실패:', e)
+    print('🔍 설치된 패키지 목록:')
+    import subprocess
+    result = subprocess.run(['pip3', 'list'], capture_output=True, text=True)
+    print(result.stdout)
+except Exception as e:
+    print('❌ 기타 오류:', e)
+"
+        echo "================================"
+        echo
+    done
 }
 
 # 메인 루프
