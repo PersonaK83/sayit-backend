@@ -216,6 +216,75 @@ check_job_status() {
     curl -s "http://localhost:3000/api/transcribe/status/$job_id" | python3 -m json.tool 2>/dev/null || curl -s "http://localhost:3000/api/transcribe/status/$job_id"
 }
 
+# Result Collector 연결 디버깅 함수
+debug_result_collector() {
+    echo "🔍 Result Collector 연결 디버깅..."
+    
+    # 1. 워커에서 Result Collector 접근 테스트
+    echo "📡 워커 → Result Collector 연결 테스트:"
+    
+    for worker in sayit-worker-1-m2 sayit-worker-2-m2 sayit-worker-3-m2; do
+        if docker ps --format "{{.Names}}" | grep -q "$worker"; then
+            echo "--- $worker ---"
+            
+            # 워커 컨테이너에서 result-collector 모듈 확인
+            collector_test=$(docker exec $worker node -e "
+try {
+    const resultCollector = require('./services/result-collector');
+    console.log('✅ Result Collector 모듈 로드 성공');
+    console.log('📊 타입:', typeof resultCollector);
+    console.log('📋 메서드:', Object.getOwnPropertyNames(resultCollector).join(', '));
+} catch (error) {
+    console.log('❌ Result Collector 로드 실패:', error.message);
+}
+" 2>/dev/null)
+            echo "$collector_test"
+            echo
+        fi
+    done
+    
+    # 2. Direct Backend에서 Result Collector 상태 확인
+    echo "🏠 Direct Backend Result Collector 상태:"
+    docker exec sayit-direct-backend node -e "
+try {
+    const resultCollector = require('./services/result-collector');
+    console.log('✅ Result Collector 활성화됨');
+    console.log('📊 현재 작업 수:', resultCollector.jobs ? resultCollector.jobs.size : 'Unknown');
+    console.log('🎯 이벤트 리스너 수:', resultCollector.listenerCount('completed'));
+} catch (error) {
+    console.log('❌ Result Collector 확인 실패:', error.message);
+}
+" 2>/dev/null
+}
+
+# 강제 작업 완료 함수
+force_complete_job() {
+    echo "🔧 작업 강제 완료 처리..."
+    
+    read -p "완료 처리할 작업 ID를 입력하세요: " job_id
+    
+    if [ -z "$job_id" ]; then
+        echo "❌ 작업 ID가 입력되지 않았습니다."
+        return 1
+    fi
+    
+    echo "🎯 작업 강제 완료 처리: $job_id"
+    
+    # Direct Backend에서 강제 완료 처리
+    docker exec sayit-direct-backend node -e "
+const resultCollector = require('./services/result-collector');
+
+// 테스트 결과로 강제 완료
+resultCollector.collectChunkResult('$job_id', 0, '강제 완료된 작업입니다.');
+
+console.log('✅ 강제 완료 처리 완료');
+" 2>/dev/null || echo "❌ 강제 완료 처리 실패"
+    
+    # 완료 후 상태 확인
+    sleep 3
+    curl -s "http://localhost:3000/api/transcribe/status/$job_id" | python3 -m json.tool 2>/dev/null
+}
+
 show_menu() {
     echo "========================================="
     echo "   🍎 SayIt M2 분산처리 관리자"
@@ -233,6 +302,8 @@ show_menu() {
     echo "11. 🔍 비동기 작업 디버깅"
     echo "12. 📊 작업 상태 조회"
     echo "13. 🔗 워커 연결 확인"
+    echo "14. 📡 Result Collector 디버깅"
+    echo "15. 🔧 작업 강제 완료"
     echo "0. 종료"
     echo "========================================="
 }
@@ -536,6 +607,8 @@ while true; do
         11) debug_async_jobs ;;
         12) check_job_status ;;
         13) check_worker_connections ;;
+        14) debug_result_collector ;;
+        15) force_complete_job ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
