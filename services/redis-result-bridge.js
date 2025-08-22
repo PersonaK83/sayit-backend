@@ -10,9 +10,9 @@ class RedisResultBridge {
     if (this.connected) return;
     
     try {
+      // 🔧 최신 Redis 클라이언트 문법으로 수정
       this.redisClient = redis.createClient({
-        host: process.env.REDIS_HOST || 'sayit-redis-m2',
-        port: process.env.REDIS_PORT || 6379
+        url: `redis://${process.env.REDIS_HOST || 'sayit-redis-m2'}:${process.env.REDIS_PORT || 6379}`
       });
 
       await this.redisClient.connect();
@@ -39,7 +39,7 @@ class RedisResultBridge {
       };
       
       await this.redisClient.set(completedKey, JSON.stringify(completedData));
-      await this.redisClient.expire(completedKey, 3600);
+      await this.redisClient.expire(completedKey, 3600); // 1시간 후 삭제
       
       console.log(`📡 Redis에 청크 결과 저장 [${jobId}] 청크 ${chunkIndex}`);
       
