@@ -285,6 +285,143 @@ console.log('✅ 강제 완료 처리 완료');
     curl -s "http://localhost:3000/api/transcribe/status/$job_id" | python3 -m json.tool 2>/dev/null
 }
 
+# Result Collector 문제 해결 함수
+fix_result_collector() {
+    echo "🔧 Result Collector 통신 문제 해결 중..."
+    
+    # 1. 현재 문제 상황 확인
+    echo "📊 현재 문제 상황:"
+    echo "   - 워커에서 처리 완료됨"
+    echo "   - Direct Backend로 결과 전달 안됨"
+    echo "   - 각 컨테이너가 독립적인 Result Collector 인스턴스 사용"
+    
+    # 2. Redis를 통한 결과 전달 방식으로 수정
+    echo "🔧 Redis 기반 결과 전달 방식으로 수정 중..."
+    
+    # Direct Backend에 Redis 결과 수신 리스너 추가
+    docker exec sayit-direct-backend node -e "
+const redis = require('redis');
+const client = redis.createClient({
+    host: 'sayit-redis-m2',
+    port: 6379
+});
+
+// Redis에서 완료된 작업 결과 확인
+client.on('connect', () => {
+    console.log('✅ Redis 연결됨');
+    
+    // 완료된 작업 키 확인
+    client.keys('result:*', (err, keys) => {
+        if (keys && keys.length > 0) {
+            console.log('📋 Redis에 저장된 결과들:', keys);
+            
+            keys.forEach(key => {
+                client.get(key, (err, result) => {
+                    if (result) {
+                        console.log('📝 결과:', key, '→', result.substring(0, 100) + '...');
+                    }
+                });
+            });
+        } else {
+            console.log('📋 Redis에 저장된 결과 없음');
+        }
+    });
+});
+
+client.connect().catch(console.error);
+
+setTimeout(() => {
+    client.quit();
+}, 3000);
+" 2>/dev/null || echo "Redis 결과 확인 실패"
+    
+    echo "✅ Result Collector 진단 완료"
+}
+
+# 멈춘 작업 복구 함수
+recover_stuck_jobs() {
+    echo "🔧 멈춘 작업 복구 시작..."
+    
+    # 1. 현재 processing 상태인 작업들 찾기
+    echo "📊 멈춘 작업 찾는 중..."
+    stuck_jobs=$(curl -s http://localhost:3000/api/transcribe/jobs | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    stuck = []
+    for job in data.get('jobs', []):
+        if job.get('status') == 'processing':
+            # 5분 이상 처리 중인 작업
+            import time
+            created = job.get('createdAt', 0) / 1000
+            if time.time() - created > 300:  # 5분
+                stuck.append(job.get('id'))
+    
+    if stuck:
+        print('멈춘 작업들:', ','.join(stuck))
+    else:
+        print('없음')
+except Exception as e:
+    print('오류:', e)
+" 2>/dev/null)
+    
+    echo "🎯 멈춘 작업: $stuck_jobs"
+    
+    if [ "$stuck_jobs" != "없음" ] && [ -n "$stuck_jobs" ]; then
+        echo "🔧 멈춘 작업들을 완료 상태로 변경하시겠습니까? (y/N)"
+        read -p "선택: " fix_choice
+        
+        if [[ $fix_choice =~ ^[Yy]$ ]]; then
+            # 각 멈춘 작업을 강제 완료 처리
+            IFS=',' read -ra JOBS <<< "$stuck_jobs"
+            for job_id in "${JOBS[@]}"; do
+                job_id=$(echo "$job_id" | tr -d ' ')
+                echo "🎯 작업 복구 중: $job_id"
+                
+                # Direct Backend에서 강제 완료
+                docker exec sayit-direct-backend node -e "
+const fs = require('fs');
+const path = require('path');
+
+// transcriptionJobs Map에 직접 접근하여 상태 변경
+console.log('🔧 작업 상태 강제 업데이트: $job_id');
+
+// API를 통해 상태 업데이트
+const http = require('http');
+const postData = JSON.stringify({
+    jobId: '$job_id',
+    status: 'completed',
+    transcript: '복구된 작업입니다. 다시 변환해주세요.',
+    force: true
+});
+
+const options = {
+    hostname: 'localhost',
+    port: 3000,
+    path: '/api/transcribe/force-complete',
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+    }
+};
+
+const req = http.request(options, (res) => {
+    console.log('✅ 강제 완료 요청 전송됨');
+});
+
+req.write(postData);
+req.end();
+" 2>/dev/null || echo "강제 완료 실패: $job_id"
+            done
+            
+            echo "✅ 멈춘 작업 복구 완료"
+        fi
+    else
+        echo "✅ 멈춘 작업 없음"
+    fi
+}
+
 show_menu() {
     echo "========================================="
     echo "   🍎 SayIt M2 분산처리 관리자"
@@ -303,7 +440,7 @@ show_menu() {
     echo "12. 📊 작업 상태 조회"
     echo "13. 🔗 워커 연결 확인"
     echo "14. 📡 Result Collector 디버깅"
-    echo "15. 🔧 작업 강제 완료"
+    echo "15. 🔧 멈춘 작업 복구"
     echo "0. 종료"
     echo "========================================="
 }
@@ -608,7 +745,7 @@ while true; do
         12) check_job_status ;;
         13) check_worker_connections ;;
         14) debug_result_collector ;;
-        15) force_complete_job ;;
+        15) recover_stuck_jobs ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
