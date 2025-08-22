@@ -705,6 +705,139 @@ TEMP_FIX_EOF
     echo "3. 11번 메뉴로 디버깅 확인"
 }
 
+# Redis 구독 완전 수정 함수
+complete_redis_fix() {
+    echo "🔧 Redis 구독 시스템 완전 수정 중..."
+    
+    # 1. 기존 수정 내용 롤백
+    echo "🔄 기존 파일 복원 중..."
+    if [ -f "routes/transcribe.js.backup" ]; then
+        cp routes/transcribe.js.backup routes/transcribe.js
+        echo "✅ transcribe.js 복원 완료"
+    fi
+    
+    if [ -f "services/transcription-queue.js.backup" ]; then
+        cp services/transcription-queue.js.backup services/transcription-queue.js
+        echo "✅ transcription-queue.js 복원 완료"
+    fi
+    
+    # 2. 간단하고 확실한 Redis 통신 방식으로 수정
+    echo "📝 간단한 Redis 통신 방식 적용 중..."
+    
+    # transcription-queue.js 수정: resultCollector 대신 Redis SET 사용
+    cat > /tmp/queue-fix.patch << 'QUEUE_PATCH_EOF'
+    // Redis를 통한 직접 결과 저장 (간단한 방식)
+    try {
+      const redis = require('redis');
+      const redisClient = redis.createClient({
+        host: process.env.REDIS_HOST || 'sayit-redis-m2',
+        port: process.env.REDIS_PORT || 6379
+      });
+      
+      await redisClient.connect();
+      
+      // 결과를 Redis에 직접 저장
+      const resultKey = `result:${jobId}:${chunkIndex}`;
+      await redisClient.set(resultKey, result.text);
+      await redisClient.expire(resultKey, 3600); // 1시간 후 자동 삭제
+      
+      // 완료 신호도 저장
+      const completedKey = `completed:${jobId}`;
+      await redisClient.set(completedKey, JSON.stringify({
+        jobId,
+        chunkIndex,
+        result: result.text,
+        timestamp: Date.now()
+      }));
+      await redisClient.expire(completedKey, 3600);
+      
+      console.log(`📡 Redis에 결과 저장 완료 [${jobId}] 청크 ${chunkIndex}`);
+      await redisClient.quit();
+    } catch (redisError) {
+      console.error(`❌ Redis 결과 저장 실패:`, redisError);
+    }
+QUEUE_PATCH_EOF
+    
+    # resultCollector 호출을 Redis 저장으로 교체
+    sed -i.fix '/resultCollector\.collectChunkResult/r /tmp/queue-fix.patch' services/transcription-queue.js
+    sed -i.fix '/resultCollector\.collectChunkResult/d' services/transcription-queue.js
+    
+    # 3. routes/transcribe.js에 Redis 폴링 방식 추가
+    echo "📝 Redis 폴링 방식 추가 중..."
+    
+    cat >> routes/transcribe.js << 'REDIS_POLL_EOF'
+
+// 🎯 Redis 기반 결과 확인 시스템 (폴링 방식)
+async function checkRedisResults() {
+  try {
+    const redis = require('redis');
+    const redisClient = redis.createClient({
+      host: process.env.REDIS_HOST || 'sayit-redis-m2',
+      port: process.env.REDIS_PORT || 6379
+    });
+    
+    await redisClient.connect();
+    
+    // 완료된 작업들 확인
+    const completedKeys = await redisClient.keys('completed:*');
+    
+    for (const key of completedKeys) {
+      try {
+        const resultData = await redisClient.get(key);
+        if (resultData) {
+          const { jobId, result } = JSON.parse(resultData);
+          
+          // transcriptionJobs 상태 업데이트
+          const job = transcriptionJobs.get(jobId);
+          if (job && job.status === JobStatus.PROCESSING) {
+            job.status = JobStatus.COMPLETED;
+            job.completedAt = Date.now();
+            job.transcript = result;
+            job.error = null;
+            transcriptionJobs.set(jobId, job);
+            
+            console.log(`✅ Redis 폴링: 작업 완료 처리 [${jobId}]`);
+            console.log(`📝 최종 결과: ${result}`);
+            
+            // 처리된 키 삭제
+            await redisClient.del(key);
+          }
+        }
+      } catch (parseError) {
+        console.error('❌ Redis 결과 파싱 실패:', parseError);
+      }
+    }
+    
+    await redisClient.quit();
+  } catch (error) {
+    console.error('❌ Redis 결과 확인 실패:', error);
+  }
+}
+
+// 5초마다 Redis 결과 확인
+setInterval(checkRedisResults, 5000);
+console.log('✅ Redis 폴링 시스템 시작 (5초 간격)');
+REDIS_POLL_EOF
+    
+    echo "✅ Redis 폴링 시스템 추가 완료"
+    
+    # 4. 정리
+    rm -f /tmp/queue-fix.patch
+    
+    # 5. 시스템 재시작
+    echo "🔄 완전 수정된 시스템 재시작 중..."
+    stop_system
+    sleep 5
+    start_system
+    
+    echo "✅ Redis 기반 결과 전달 시스템 완전 적용 완료!"
+    echo
+    echo "🎯 이제 다음을 확인하세요:"
+    echo "1. 17번 메뉴로 Redis 상태 재확인"
+    echo "2. 앱에서 비동기 변환 테스트"
+    echo "3. 5초 후 자동으로 완료 상태로 변경되는지 확인"
+}
+
 show_menu() {
     echo "========================================="
     echo "   🍎 SayIt M2 분산처리 관리자"
@@ -723,9 +856,10 @@ show_menu() {
     echo "12. 📊 작업 상태 조회"
     echo "13. 🔗 워커 연결 확인"
     echo "14. 📡 Result Collector 디버깅"
-    echo "15. 🔧 멀춘 작업 복구"
+    echo "15. 🔧 멈춘 작업 복구"
     echo "16. 🚀 Redis 기반 시스템 적용"
     echo "17. 📡 Redis 구독 상태 확인"
+    echo "18. 🎯 Redis 시스템 완전 수정"
     echo "0. 종료"
     echo "========================================="
 }
@@ -1033,6 +1167,7 @@ while true; do
         15) recover_stuck_jobs ;;
         16) apply_redis_fix ;;
         17) check_redis_subscription ;;
+        18) complete_redis_fix ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
