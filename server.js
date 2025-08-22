@@ -10,7 +10,7 @@ const { errorHandler, notFound } = require('./middleware/errorMiddleware');
 
 // 큐 시스템 초기화 (중요!)
 const transcriptionQueue = require('./services/transcription-queue');
-const resultCollector = require('./services/result-collector');
+// const resultCollector = require('./services/result-collector'); // ❌ 제거 (Redis로 대체)
 
 const app = express();
 const PORT = process.env.PORT || 3000;

@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 
 // 큐 시스템 import 추가
 const { queueAudioTranscription } = require('../services/audio-processor');
-// const resultCollector = require('../services/result-collector'); // ❌ 제거
+// const resultCollector = require('../services/result-collector'); // ❌ 완전 제거
 const redisResultBridge = require('../services/redis-result-bridge'); // ✅ Redis만 사용
 
 const router = express.Router();
