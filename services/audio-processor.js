@@ -2,7 +2,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const fs = require('fs').promises;
 const transcriptionQueue = require('./transcription-queue');
-const resultCollector = require('./result-collector');
+// const resultCollector = require('./result-collector'); // ❌ 제거
 const { generateJobId, formatFileSize, formatDuration } = require('./utils');
 
 // 오디오 파일 분할
@@ -78,7 +78,7 @@ async function queueAudioTranscription(audioFilePath, language = 'auto') {
     const { jobId, chunkFiles, outputDir } = await splitAudioFile(audioFilePath);
     
     // 2. 결과 수집기에 작업 등록
-    resultCollector.registerJob(jobId, chunkFiles.length);
+    // resultCollector.registerJob(jobId, chunkFiles.length); // ❌ 제거
     
     // 3. 각 청크를 큐에 등록
     const chunkJobs = [];
@@ -119,15 +119,16 @@ async function queueAudioTranscription(audioFilePath, language = 'auto') {
 // 임시 파일 정리 함수
 async function cleanupTempFiles(outputDir) {
   try {
-    await fs.rm(outputDir, { recursive: true, force: true });
-    console.log(`🧹 임시 파일 정리 완료: ${outputDir}`);
+    if (outputDir && await fs.access(outputDir).then(() => true).catch(() => false)) {
+      await fs.rmdir(outputDir, { recursive: true });
+      console.log(`🧹 임시 파일 정리 완료: ${outputDir}`);
+    }
   } catch (error) {
-    console.warn(`⚠️ 임시 파일 정리 실패: ${outputDir}`, error.message);
+    console.error(`❌ 임시 파일 정리 실패: ${error.message}`);
   }
 }
 
 module.exports = {
   queueAudioTranscription,
-  splitAudioFile,
-  cleanupTempFiles
+  cleanupTempFiles // 내부 함수로 export
 };
