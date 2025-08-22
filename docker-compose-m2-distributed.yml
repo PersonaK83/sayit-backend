@@ -57,6 +57,8 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./temp:/app/temp
+      - ./services:/app/services          # ✅ 소스 코드 마운트 추가
+      - ./routes:/app/routes              # ✅ 라우트 마운트 추가
       - whisper_cache_1:/tmp/whisper
     networks:
       - sayit-network
@@ -89,6 +91,8 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./temp:/app/temp
+      - ./services:/app/services          # ✅ 소스 코드 마운트 추가
+      - ./routes:/app/routes              # ✅ 라우트 마운트 추가
       - whisper_cache_2:/tmp/whisper
     networks:
       - sayit-network
@@ -121,6 +125,8 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./temp:/app/temp
+      - ./services:/app/services          # ✅ 소스 코드 마운트 추가
+      - ./routes:/app/routes              # ✅ 라우트 마운트 추가
       - whisper_cache_3:/tmp/whisper
     networks:
       - sayit-network
