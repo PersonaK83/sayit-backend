@@ -124,6 +124,64 @@ check_and_clean_queue() {
     fi
 }
 
+# 비동기 작업 디버깅 함수
+debug_async_jobs() {
+    echo "🔍 비동기 작업 디버깅 시작..."
+    
+    # 1. Redis 큐 상태 상세 확인
+    echo "📊 Redis 큐 상태:"
+    docker exec sayit-redis-m2 redis-cli eval "
+        local keys = redis.call('keys', '*bull*')
+        for i=1,#keys do
+            local key = keys[i]
+            local type = redis.call('type', key)['ok']
+            if type == 'hash' then
+                local data = redis.call('hgetall', key)
+                print(key .. ': ' .. table.concat(data, ', '))
+            elseif type == 'list' then
+                local len = redis.call('llen', key)
+                print(key .. ': ' .. len .. ' items')
+            end
+        end
+        return 'done'
+    " 0 2>/dev/null || echo "Redis 키 조회 실패"
+    
+    # 2. Direct Backend에서 transcriptionJobs 상태 확인
+    echo
+    echo "📋 Direct Backend 작업 상태 확인:"
+    docker exec sayit-direct-backend curl -s http://localhost:3000/api/transcribe/jobs 2>/dev/null || echo "작업 목록 API 없음"
+    
+    # 3. 각 워커의 최근 로그 확인
+    echo
+    echo "⚡ 워커별 최근 처리 로그:"
+    for worker in sayit-worker-1-m2 sayit-worker-2-m2 sayit-worker-3-m2; do
+        if docker ps --format "{{.Names}}" | grep -q "$worker"; then
+            echo "--- $worker ---"
+            docker logs $worker --tail 5 2>/dev/null | grep -E "(청크 처리|Whisper|완료|실패)"
+        fi
+    done
+    
+    # 4. Result Collector 이벤트 확인
+    echo
+    echo "📡 Result Collector 이벤트 상태:"
+    docker logs sayit-direct-backend --tail 20 | grep -E "(completed|failed|이벤트|상태 업데이트)"
+}
+
+# 작업 상태 강제 확인 함수
+check_job_status() {
+    echo "📊 현재 진행 중인 작업 상태 확인..."
+    
+    read -p "작업 ID를 입력하세요 (예: job_1755838320384_b48f81c4): " job_id
+    
+    if [ -z "$job_id" ]; then
+        echo "❌ 작업 ID가 입력되지 않았습니다."
+        return 1
+    fi
+    
+    echo "🔍 작업 상태 조회: $job_id"
+    curl -s "http://localhost:3000/api/transcribe/status/$job_id" | python3 -m json.tool 2>/dev/null || curl -s "http://localhost:3000/api/transcribe/status/$job_id"
+}
+
 show_menu() {
     echo "========================================="
     echo "   🍎 SayIt M2 분산처리 관리자"
@@ -137,6 +195,9 @@ show_menu() {
     echo "7. 🧪 연결 테스트"
     echo "8. 🎙️ Whisper 설치/확인"
     echo "9. 🧹 큐 정리"
+    echo "10. 📊 Whisper 모델 확인"
+    echo "11. 🔍 비동기 작업 디버깅"
+    echo "12. 📊 작업 상태 조회"
     echo "0. 종료"
     echo "========================================="
 }
@@ -435,6 +496,9 @@ while true; do
         7) test_connection ;;
         8) check_and_install_whisper ;;
         9) check_and_clean_queue ;;
+        10) check_whisper_models ;;
+        11) debug_async_jobs ;;
+        12) check_job_status ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
