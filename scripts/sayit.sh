@@ -374,6 +374,7 @@ while true; do
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
     
+    
     echo
     read -p "계속하려면 Enter를 누르세요..."
 done
