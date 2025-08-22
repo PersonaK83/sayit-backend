@@ -4,9 +4,9 @@ const fs = require('fs-extra');
 const path = require('path');
 const { spawn } = require('child_process');
 
-// ❌ 임시로 audio-processor import 제거 (circular dependency 해결)
+// ❌ 모든 circular dependency 가능성 제거
 // const { queueAudioTranscription } = require('../services/audio-processor');
-const redisResultBridge = require('../services/redis-result-bridge');
+// const redisResultBridge = require('../services/redis-result-bridge');
 
 const router = express.Router();
 
@@ -16,7 +16,7 @@ const transcriptionJobs = new Map();
 // 작업 상태 enum
 const JobStatus = {
   PENDING: 'pending',
-  PROCESSING: 'processing', 
+  PROCESSING: 'processing',
   COMPLETED: 'completed',
   FAILED: 'failed'
 };
@@ -60,7 +60,7 @@ const upload = multer({
       'audio/wave', 'audio/webm', 'audio/aac', 'audio/x-aac',
       'audio/mp4a-latm', 'audio/ogg', 'audio/opus', 'audio/flac'
     ];
-    
+
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
@@ -73,11 +73,11 @@ const upload = multer({
 function checkWhisperInstallation() {
   return new Promise((resolve) => {
     const python = spawn('python3', ['-c', 'import whisper; print("installed")']);
-    
+
     python.on('close', (code) => {
       resolve(code === 0);
     });
-    
+
     python.on('error', () => {
       resolve(false);
     });
@@ -90,7 +90,7 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
     console.log(`🎙️ 비동기 Whisper 변환 시작 [${jobId}]...`);
     console.log('📁 파일 경로:', audioFilePath);
     console.log('🌐 언어 설정:', language);
-    
+
     // 작업 상태 업데이트: 처리 중
     const job = transcriptionJobs.get(jobId);
     if (job) {
@@ -98,15 +98,15 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       job.startedAt = Date.now();
       transcriptionJobs.set(jobId, job);
     }
-    
+
     // ✅ 환경 변수로 경고 메시지 숨기기 + 메모리 최적화
-    const env = { 
-      ...process.env, 
+    const env = {
+      ...process.env,
       PYTHONWARNINGS: 'ignore::UserWarning',
       OMP_NUM_THREADS: '2',  // OpenMP 스레드 제한
       MKL_NUM_THREADS: '2'   // Intel MKL 스레드 제한
     };
-    
+
     // ✅ Whisper 명령어 구성 (AAC 파일 지원 개선)
     const whisperArgs = [
       '-m', 'whisper',
@@ -119,7 +119,7 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       '--temperature', '0',  // 온도 0으로 설정하여 안정성 향상
       '--best_of', '1'  // 단일 디코딩으로 메모리 절약
     ];
-    
+
     // ✅ 언어 모드별 처리
     if (language === 'auto') {
       console.log('🔍 자동 언어 감지 모드 (혼합 언어 지원)');
@@ -133,11 +133,11 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       whisperArgs.push('--language', language);
       console.log(`🎯 단일 언어 모드: ${language}`);
     }
-    
+
     console.log('🔧 Whisper 실행 명령어:', whisperArgs.join(' '));
-    
+
     // ✅ 프로세스 스폰 옵션 개선
-    const python = spawn('python3', whisperArgs, { 
+    const python = spawn('python3', whisperArgs, {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: false,
@@ -153,14 +153,14 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
     const timeout = setTimeout(() => {
       console.log(`⏰ Whisper 프로세스 타임아웃 [${jobId}]`);
       python.kill('SIGKILL');
-      
+
       const job = transcriptionJobs.get(jobId);
       if (job) {
         job.status = JobStatus.FAILED;
         job.error = 'Processing timeout (5 minutes)';
         transcriptionJobs.set(jobId, job);
       }
-      
+
       resolve({ success: false, error: 'Processing timeout' });
     }, 5 * 60 * 1000); // 5분 타임아웃
 
@@ -169,7 +169,7 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
       console.log(`Whisper 출력 [${jobId}]:`, output);
       stdout += output;
       hasOutput = true;
-      
+
       // 진행률 업데이트 (간단한 추정)
       const job = transcriptionJobs.get(jobId);
       if (job && job.status === JobStatus.PROCESSING) {
@@ -181,8 +181,8 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
     python.stderr.on('data', (data) => {
       const error = data.toString();
       // ✅ 불필요한 경고 메시지 필터링
-      if (!error.includes('UserWarning') && 
-          !error.includes('FP16') && 
+      if (!error.includes('UserWarning') &&
+          !error.includes('FP16') &&
           !error.includes('TensorFloat-32')) {
         console.log(`Whisper 로그 [${jobId}]:`, error);
       }
@@ -192,7 +192,7 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
     python.on('close', async (code) => {
       clearTimeout(timeout); // 타임아웃 클리어
       console.log(`Whisper 프로세스 종료 [${jobId}] 코드: ${code}`);
-      
+
       const job = transcriptionJobs.get(jobId);
       if (!job) {
         console.log(`❌ 작업을 찾을 수 없음: ${jobId}`);
@@ -205,20 +205,20 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
           // 결과 파일 읽기
           const audioFileName = path.parse(audioFilePath).name;
           const resultFilePath = path.join(uploadDir, `${audioFileName}.txt`);
-          
+
           if (await fs.pathExists(resultFilePath)) {
             const transcribedText = await fs.readFile(resultFilePath, 'utf8');
             const cleanedText = transcribedText.trim();
-            
+
             console.log(`✅ Whisper 변환 완료 [${jobId}]:`, cleanedText);
-            
+
             // 작업 완료 상태 업데이트
             job.status = JobStatus.COMPLETED;
             job.result = cleanedText;
             job.completedAt = Date.now();
             job.progress = 1.0;
             transcriptionJobs.set(jobId, job);
-            
+
             // 임시 파일 정리
             try {
               await fs.remove(audioFilePath);
@@ -227,7 +227,7 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
             } catch (cleanupError) {
               console.log(`⚠️ 파일 정리 실패 [${jobId}]:`, cleanupError.message);
             }
-            
+
             resolve({ success: true, text: cleanedText });
           } else {
             throw new Error('결과 파일을 찾을 수 없습니다');
@@ -243,11 +243,11 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
         // 실패 처리
         const errorMessage = stderr || `Whisper 프로세스 실패 (코드: ${code})`;
         console.log(`❌ Whisper 변환 실패 [${jobId}]:`, errorMessage);
-        
+
         job.status = JobStatus.FAILED;
         job.error = errorMessage;
         transcriptionJobs.set(jobId, job);
-        
+
         resolve({ success: false, error: errorMessage });
       }
     });
@@ -255,14 +255,14 @@ async function transcribeWithLocalWhisperAsync(audioFilePath, jobId, language = 
     python.on('error', (error) => {
       clearTimeout(timeout);
       console.log(`❌ Whisper 프로세스 에러 [${jobId}]:`, error.message);
-      
+
       const job = transcriptionJobs.get(jobId);
       if (job) {
         job.status = JobStatus.FAILED;
         job.error = error.message;
         transcriptionJobs.set(jobId, job);
       }
-      
+
       resolve({ success: false, error: error.message });
     });
   });
@@ -273,7 +273,7 @@ async function transcribeWithLocalWhisper(audioFilePath) {
   return new Promise((resolve, reject) => {
     console.log('🎙️ 로컬 Whisper로 변환 시작...');
     console.log('📁 파일 경로:', audioFilePath);
-    
+
     const python = spawn('python3', [
       '-m', 'whisper',
       audioFilePath,
@@ -300,18 +300,18 @@ async function transcribeWithLocalWhisper(audioFilePath) {
 
     python.on('close', async (code) => {
       console.log(`🏁 Whisper 종료 (코드: ${code})`);
-      
+
       if (code === 0) {
         try {
           const audioName = path.parse(audioFilePath).name;
           const textFilePath = path.join(uploadDir, `${audioName}.txt`);
-          
+
           if (await fs.pathExists(textFilePath)) {
             const transcript = await fs.readFile(textFilePath, 'utf8');
             const cleanTranscript = transcript.trim();
-            
+
             console.log('✅ 변환 완료:', cleanTranscript);
-            
+
             await fs.remove(textFilePath);
             resolve(cleanTranscript || '변환된 텍스트가 없습니다.');
           } else {
@@ -354,15 +354,15 @@ router.post('/upload', upload.single('audio'), async (req, res) => {
     if (!audioFile) {
       return res.status(400).json({ error: '오디오 파일이 필요합니다.' });
     }
-    
+
     // 파일 길이 체크
     const duration = await checkAudioDuration(audioFile.path);
     const maxDuration = 30 * 60; // 30분
-    
+
     if (duration > maxDuration) {
       // 임시 파일 삭제
       fs.unlinkSync(audioFile.path);
-      
+
       return res.status(413).json({
         error: '파일이 너무 깁니다.',
         message: '30분 이하의 오디오 파일만 처리 가능합니다.',
@@ -371,17 +371,17 @@ router.post('/upload', upload.single('audio'), async (req, res) => {
         premiumRequired: true
       });
     }
-    
+
     // 큐 시스템으로 처리
     const { jobId } = await queueAudioTranscription(audioFile.path, req.body.language);
-    
+
     res.json({
       success: true,
       jobId,
       message: '변환 작업이 큐에 등록되었습니다.',
       estimatedTime: Math.ceil(duration / 60 * 0.3) // 예상 처리 시간
     });
-    
+
   } catch (error) {
     console.error('업로드 처리 실패:', error);
     res.status(500).json({ error: '서버 오류가 발생했습니다.' });
@@ -393,11 +393,11 @@ router.post('/upload', upload.single('audio'), async (req, res) => {
 // ✅ STT 변환 엔드포인트 (폴링 지원)
 router.post('/transcribe', upload.single('audio'), async (req, res) => {
   let tempFilePath = null;
-  
+
   try {
     console.log('\n🎤 === STT 변환 요청 시작 ===');
     console.log('📅 시간:', new Date().toISOString());
-    
+
     if (!req.file) {
       return res.status(400).json({
         error: '오디오 파일이 업로드되지 않았습니다.',
@@ -408,7 +408,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     tempFilePath = req.file.path;
     const language = req.body.language || 'ko';
     const isAsync = req.body.async === 'true';
-    
+
     console.log(`📁 파일 업로드 완료:`, {
       filename: req.file.filename,
       originalname: req.file.originalname,
@@ -439,12 +439,12 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       // 큐 시스템으로 처리
       try {
         const { jobId: queueJobId } = await queueAudioTranscription(tempFilePath, language);
-        
+
         // 🎯 Redis Result Bridge에 작업 등록
         const audioInfo = await checkAudioDuration(tempFilePath);
         const estimatedChunks = Math.ceil(audioInfo / 120); // 2분 청크
         redisResultBridge.registerJob(queueJobId, estimatedChunks);
-        
+
         // transcriptionJobs에도 등록
         transcriptionJobs.set(queueJobId, {
           id: queueJobId,
@@ -460,9 +460,9 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
           transcript: null,
           error: null
         });
-        
+
         console.log(`✅ Redis 기반 큐 시스템 작업 등록: ${queueJobId}`);
-        
+
         res.json({
           success: true,
           jobId: queueJobId,
@@ -470,7 +470,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
           message: 'Redis 기반 변환 작업이 등록되었습니다.',
           estimatedTime: Math.ceil(req.file.size / (10 * 1024)) + 30
         });
-        
+
       } catch (error) {
         console.error('큐 시스템 등록 실패:', error);
         // 기존 방식으로 폴백
@@ -490,7 +490,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
           error: null
         });
         transcribeWithLocalWhisperAsync(tempFilePath, jobId, language);
-        
+
         res.json({
           success: true,
           jobId: jobId,
@@ -503,7 +503,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       // ⚡ 동기 처리 (작은 파일용)
       console.log('⚡ 동기 처리 모드 (작은 파일)');
       const transcript = await transcribeWithLocalWhisper(tempFilePath);
-      
+
       // 성공 응답
       res.json({
         success: true,
@@ -517,7 +517,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
 
       console.log('🎉 STT 변환 성공!');
       console.log('📝 변환 결과:', transcript);
-      
+
       // 임시 파일 정리
       if (tempFilePath) {
         try {
@@ -531,13 +531,13 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
 
   } catch (error) {
     console.error('❌ STT 변환 실패:', error);
-    
+
     res.status(500).json({
       error: '음성 변환 중 오류가 발생했습니다.',
       details: error.message,
       code: 'TRANSCRIPTION_FAILED'
     });
-    
+
     // 동기 처리 시에만 임시 파일 정리 (비동기는 백그라운드에서 처리)
     if (tempFilePath && !req.body.async) {
       try {
@@ -554,7 +554,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
 router.get('/transcribe/status/:jobId', (req, res) => {
   const jobId = req.params.jobId;
   const job = transcriptionJobs.get(jobId);
-  
+
   if (!job) {
     return res.status(404).json({
       error: '작업을 찾을 수 없습니다.',
@@ -562,7 +562,7 @@ router.get('/transcribe/status/:jobId', (req, res) => {
       code: 'JOB_NOT_FOUND'
     });
   }
-  
+
   // 진행률 계산
   let progress = 0;
   if (job.status === JobStatus.PENDING) {
@@ -577,9 +577,9 @@ router.get('/transcribe/status/:jobId', (req, res) => {
   } else if (job.status === JobStatus.FAILED) {
     progress = 0;
   }
-  
+
   console.log(`📊 작업 상태 조회 [${jobId}]: ${job.status} (${(progress * 100).toFixed(1)}%)`);
-  
+
   res.json({
     jobId: jobId,
     status: job.status,
@@ -605,7 +605,7 @@ router.get('/transcribe/jobs', (req, res) => {
     startedAt: job.startedAt ? new Date(job.startedAt).toISOString() : null,
     completedAt: job.completedAt ? new Date(job.completedAt).toISOString() : null
   }));
-  
+
   res.json({
     totalJobs: jobs.length,
     jobs: jobs
@@ -615,7 +615,7 @@ router.get('/transcribe/jobs', (req, res) => {
 // 진단 엔드포인트
 router.get('/diagnose', async (req, res) => {
   const whisperInstalled = await checkWhisperInstallation();
-  
+
   res.json({
     status: 'OK',
     message: '로컬 STT 서비스가 정상 작동 중입니다.',
@@ -623,8 +623,8 @@ router.get('/diagnose', async (req, res) => {
     whisperInstalled: whisperInstalled,
     method: whisperInstalled ? 'Local Whisper' : 'Dummy Response',
     activeJobs: transcriptionJobs.size,
-    recommendation: whisperInstalled ? 
-      '로컬 Whisper가 설치되어 실제 음성 변환이 가능합니다.' : 
+    recommendation: whisperInstalled ?
+      '로컬 Whisper가 설치되어 실제 음성 변환이 가능합니다.' :
       'pip3 install openai-whisper 명령어로 Whisper를 설치해주세요.'
   });
 });
@@ -632,20 +632,20 @@ router.get('/diagnose', async (req, res) => {
 // 작업 상태 확인
 router.get('/status/:jobId', async (req, res) => {
   const { jobId } = req.params;
-  
+
   try {
     // 큐에서 작업 상태 확인
     const jobs = await transcriptionQueue.getJobs(['waiting', 'active', 'completed', 'failed']);
     const jobStatus = jobs.filter(job => job.data.jobId === jobId);
-    
+
     if (jobStatus.length === 0) {
       return res.status(404).json({ error: '작업을 찾을 수 없습니다.' });
     }
-    
+
     const totalJobs = jobStatus.length;
     const completedJobs = jobStatus.filter(job => job.finishedOn).length;
     const failedJobs = jobStatus.filter(job => job.failedReason).length;
-    
+
     res.json({
       jobId,
       status: completedJobs === totalJobs ? 'completed' : 'processing',
@@ -655,7 +655,7 @@ router.get('/status/:jobId', async (req, res) => {
       failedChunks: failedJobs,
       estimatedTimeRemaining: (totalJobs - completedJobs) * 30 // 청크당 30초 예상
     });
-    
+
   } catch (error) {
     res.status(500).json({ error: '상태 확인 실패' });
   }
@@ -664,11 +664,11 @@ router.get('/status/:jobId', async (req, res) => {
 // 🎯 Redis Result Bridge 이벤트 리스너 (기존 resultCollector 대체)
 redisResultBridge.on('completed', (data) => {
   const { jobId, result, totalChunks, processingTime } = data;
-  
+
   console.log(`🎯 Redis 큐 시스템 작업 완료 [${jobId}]`);
   console.log(`📊 처리 시간: ${Math.round(processingTime / 1000)}초`);
   console.log(`📝 최종 결과: ${result.length}자`);
-  
+
   // transcriptionJobs 상태 업데이트
   const job = transcriptionJobs.get(jobId);
   if (job) {
@@ -677,7 +677,7 @@ redisResultBridge.on('completed', (data) => {
     job.transcript = result;
     job.error = null;
     transcriptionJobs.set(jobId, job);
-    
+
     console.log(`✅ 작업 상태 업데이트 완료 [${jobId}]: ${JobStatus.COMPLETED}`);
   } else {
     console.warn(`⚠️ 작업 ID를 찾을 수 없음: ${jobId}`);
@@ -686,9 +686,9 @@ redisResultBridge.on('completed', (data) => {
 
 redisResultBridge.on('failed', (data) => {
   const { jobId, error } = data;
-  
+
   console.log(`❌ Redis 큐 시스템 작업 실패 [${jobId}]: ${error}`);
-  
+
   const job = transcriptionJobs.get(jobId);
   if (job) {
     job.status = JobStatus.FAILED;
@@ -698,32 +698,51 @@ redisResultBridge.on('failed', (data) => {
   }
 });
 
-// 🎯 Redis 기반 결과 확인 시스템 (기존 이벤트 리스너 대체)
+// 🎯 독립적인 Redis 폴링 시스템 (import 없이)
+const redis = require('redis');
+
 async function checkRedisResults() {
   try {
-    console.log('🔍 Redis 폴링 실행 중...'); // 디버그 로그 추가
-    const completedResults = await redisResultBridge.checkCompletedJobs();
-    
-    console.log(`📋 Redis에서 발견된 완료 작업: ${completedResults.length}개`); // 디버그 로그 추가
-    
-    for (const data of completedResults) {
-      const { jobId, result } = data;
-      
-      // transcriptionJobs 상태 업데이트
-      const job = transcriptionJobs.get(jobId);
-      if (job && job.status === JobStatus.PROCESSING) {
-        job.status = JobStatus.COMPLETED;
-        job.completedAt = Date.now();
-        job.transcript = result;
-        job.error = null;
-        transcriptionJobs.set(jobId, job);
-        
-        console.log(`✅ Redis 폴링: 작업 완료 처리 [${jobId}]`);
-        console.log(`📝 최종 결과: ${result}`);
-      } else {
-        console.log(`⚠️ 작업 상태 불일치 [${jobId}]: job=${job ? job.status : 'null'}`);
+    console.log('🔍 Redis 폴링 실행 중...');
+
+    const redisClient = redis.createClient({
+      url: 'redis://sayit-redis-m2:6379'
+    });
+
+    await redisClient.connect();
+
+    const completedKeys = await redisClient.keys('completed:*');
+    console.log(`📋 Redis에서 발견된 완료 작업: ${completedKeys.length}개`);
+
+    for (const key of completedKeys) {
+      try {
+        const resultData = await redisClient.get(key);
+        if (resultData) {
+          const data = JSON.parse(resultData);
+          const { jobId, result } = data;
+
+          const job = transcriptionJobs.get(jobId);
+          if (job && job.status === JobStatus.PROCESSING) {
+            job.status = JobStatus.COMPLETED;
+            job.completedAt = Date.now();
+            job.transcript = result;
+            job.error = null;
+            transcriptionJobs.set(jobId, job);
+
+            console.log(`✅ Redis 폴링: 작업 완료 처리 [${jobId}]`);
+            console.log(`📝 최종 결과: ${result}`);
+          }
+
+          // 처리된 키 삭제
+          await redisClient.del(key);
+        }
+      } catch (parseError) {
+        console.error('❌ Redis 결과 파싱 실패:', parseError);
       }
     }
+
+    await redisClient.quit();
+
   } catch (error) {
     console.error('❌ Redis 결과 확인 실패:', error);
   }
@@ -734,6 +753,4 @@ setInterval(checkRedisResults, 5000);
 console.log('✅ Redis 폴링 시스템 시작 (5초 간격)');
 
 module.exports = router;
-
-// 함수를 별도로 export
 module.exports.transcribeWithLocalWhisperAsync = transcribeWithLocalWhisperAsync;
