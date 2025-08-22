@@ -1,7 +1,7 @@
 const Queue = require('bull');
 const redis = require('redis');
 const { spawn } = require('child_process');
-const resultCollector = require('./result-collector');
+const redisResultBridge = require('./redis-result-bridge');
 
 // Redis 연결 설정
 const redisConfig = {
@@ -124,7 +124,7 @@ async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language
   });
 }
 
-// 청크 처리 작업 정의 (동시 5개 청크 처리)
+// 큐 처리 함수 수정
 transcriptionQueue.process('chunk', 5, async (job) => {
   const { chunkPath, jobId, chunkIndex, totalChunks, language, outputDir } = job.data;
   
@@ -132,22 +132,20 @@ transcriptionQueue.process('chunk', 5, async (job) => {
   console.log(`📁 청크 파일: ${chunkPath}`);
   
   try {
-    // 직접 구현한 변환 함수 사용
     const result = await transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language);
     
     if (!result.success) {
       throw new Error(result.error || '청크 변환 실패');
     }
     
-    // 진행 상황 업데이트
     const progress = ((chunkIndex + 1) / totalChunks) * 100;
     job.progress(progress);
     
     console.log(`✅ 청크 처리 완료 [${jobId}] ${chunkIndex + 1}/${totalChunks} (${progress.toFixed(1)}%)`);
     console.log(`📝 청크 결과: ${result.text?.substring(0, 100)}...`);
     
-    // 결과 수집기에 전달
-    resultCollector.collectChunkResult(jobId, chunkIndex, result.text);
+    // 🎯 Redis를 통한 결과 전달 (기존 방식 대체)
+    await redisResultBridge.sendChunkResult(jobId, chunkIndex, result.text);
     
     return {
       chunkIndex,
@@ -159,8 +157,8 @@ transcriptionQueue.process('chunk', 5, async (job) => {
   } catch (error) {
     console.error(`❌ 청크 처리 실패 [${jobId}] ${chunkIndex + 1}/${totalChunks}:`, error.message);
     
-    // 실패한 청크도 결과 수집기에 알림 (빈 텍스트로)
-    resultCollector.collectChunkResult(jobId, chunkIndex, `[청크 ${chunkIndex + 1} 처리 실패]`);
+    // 실패한 청크도 Redis로 전달
+    await redisResultBridge.sendChunkResult(jobId, chunkIndex, `[청크 ${chunkIndex + 1} 처리 실패]`);
     
     throw error;
   }

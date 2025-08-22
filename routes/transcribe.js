@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 // 큐 시스템 import 추가
 const { queueAudioTranscription } = require('../services/audio-processor');
 const resultCollector = require('../services/result-collector');
+const redisResultBridge = require('../services/redis-result-bridge');
 
 const router = express.Router();
 
@@ -440,7 +441,12 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       try {
         const { jobId: queueJobId } = await queueAudioTranscription(tempFilePath, language);
         
-        // 기존 작업 등록 방식과 연동
+        // 🎯 Redis Result Bridge에 작업 등록
+        const audioInfo = await checkAudioDuration(tempFilePath);
+        const estimatedChunks = Math.ceil(audioInfo / 120); // 2분 청크
+        redisResultBridge.registerJob(queueJobId, estimatedChunks);
+        
+        // transcriptionJobs에도 등록
         transcriptionJobs.set(queueJobId, {
           id: queueJobId,
           status: JobStatus.PROCESSING,
@@ -456,14 +462,13 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
           error: null
         });
         
-        console.log(`🔄 큐 시스템 작업 등록: ${queueJobId}`);
+        console.log(`�� Redis 기반 큐 시스템 작업 등록: ${queueJobId}`);
         
-        // 즉시 jobId 반환
         res.json({
           success: true,
           jobId: queueJobId,
           status: JobStatus.PROCESSING,
-          message: '변환 작업이 큐에 등록되었습니다. 상태를 확인하려면 /api/transcribe/status/{jobId}를 호출하세요.',
+          message: 'Redis 기반 변환 작업이 등록되었습니다.',
           estimatedTime: Math.ceil(req.file.size / (10 * 1024)) + 30
         });
         
@@ -657,15 +662,15 @@ router.get('/status/:jobId', async (req, res) => {
   }
 });
 
-// 큐 시스템 완료 이벤트 처리 (파일 하단에 추가)
-resultCollector.on('completed', (data) => {
+// 🎯 Redis Result Bridge 이벤트 리스너 (기존 resultCollector 대체)
+redisResultBridge.on('completed', (data) => {
   const { jobId, result, totalChunks, processingTime } = data;
   
-  console.log(`🎯 큐 시스템 작업 완료 [${jobId}]`);
+  console.log(`🎯 Redis 큐 시스템 작업 완료 [${jobId}]`);
   console.log(`📊 처리 시간: ${Math.round(processingTime / 1000)}초`);
   console.log(`📝 최종 결과: ${result.length}자`);
   
-  // 기존 작업 상태 업데이트
+  // transcriptionJobs 상태 업데이트
   const job = transcriptionJobs.get(jobId);
   if (job) {
     job.status = JobStatus.COMPLETED;
@@ -680,21 +685,17 @@ resultCollector.on('completed', (data) => {
   }
 });
 
-// 큐 시스템 실패 이벤트 처리
-resultCollector.on('failed', (data) => {
+redisResultBridge.on('failed', (data) => {
   const { jobId, error } = data;
   
-  console.log(`❌ 큐 시스템 작업 실패 [${jobId}]: ${error}`);
+  console.log(`❌ Redis 큐 시스템 작업 실패 [${jobId}]: ${error}`);
   
-  // 기존 작업 상태 업데이트
   const job = transcriptionJobs.get(jobId);
   if (job) {
     job.status = JobStatus.FAILED;
     job.completedAt = Date.now();
     job.error = error;
     transcriptionJobs.set(jobId, job);
-    
-    console.log(`❌ 작업 상태 업데이트 완료 [${jobId}]: ${JobStatus.FAILED}`);
   }
 });
 
