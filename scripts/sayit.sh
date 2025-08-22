@@ -3,7 +3,7 @@
 
 COMPOSE_FILE="docker-compose-m2-distributed.yml"
 
-# Whisper 설치 확인 및 자동 설치 함수 (개선)
+# Whisper 설치 확인 및 자동 설치 함수 (근본 해결)
 check_and_install_whisper() {
     echo "🔍 모든 백엔드 컨테이너 Whisper 설치 상태 확인 중..."
     
@@ -20,7 +20,7 @@ check_and_install_whisper() {
     echo
     
     for container in $all_backends; do
-        echo "🔧 [$container] Whisper 확인 및 설치..."
+        echo "🔧 [$container] 완전한 Whisper 환경 설정..."
         
         # 컨테이너 상태 확인
         if ! docker exec $container echo "alive" > /dev/null 2>&1; then
@@ -28,94 +28,71 @@ check_and_install_whisper() {
             continue
         fi
         
-        # 🎯 transcribe.js와 동일한 방식으로 Whisper 확인
-        echo "   🔍 Python whisper 모듈 확인 중..."
+        # 1. Python3 확인
+        echo "   🐍 Python3 확인 중..."
+        if ! docker exec $container which python3 > /dev/null 2>&1; then
+            echo "   📦 Python3 설치 중..."
+            docker exec -u root $container bash -c "
+                apt-get update -qq && 
+                apt-get install -y python3-pip python3-venv -qq
+            " > /dev/null 2>&1 || {
+                echo "   ❌ Python3 설치 실패"
+                continue
+            }
+        fi
+        
+        # 2. 🎯 핵심: python → python3 심볼릭 링크 생성
+        echo "   🔗 python → python3 링크 생성 중..."
+        docker exec -u root $container bash -c "
+            ln -sf /usr/bin/python3 /usr/bin/python &&
+            echo '✅ python 링크 생성 완료'
+        " || echo "   ⚠️ python 링크 생성 실패"
+        
+        # 3. Whisper 설치 확인 (transcribe.js와 동일한 방식)
+        echo "   🔍 Whisper Python 모듈 확인 중..."
         if docker exec $container python3 -c "import whisper; print('installed')" > /dev/null 2>&1; then
             echo "   ✅ Whisper Python 모듈 정상 설치됨"
-            
-            # 추가로 바이너리도 확인
-            if docker exec $container which whisper > /dev/null 2>&1; then
-                echo "   ✅ Whisper 바이너리도 설치됨"
-            else
-                echo "   ⚠️ Whisper 바이너리 없음 (Python 모듈만 있음)"
-            fi
         else
-            echo "   📦 Whisper 설치 시작..."
-            
-            # Python3 확인 및 설치
-            if ! docker exec $container which python3 > /dev/null 2>&1; then
-                echo "   🐍 Python3 설치 중..."
-                docker exec -u root $container bash -c "
-                    apt-get update -qq && 
-                    apt-get install -y python3-pip python3-venv -qq
-                " > /dev/null 2>&1 || {
-                    echo "   ❌ Python3 설치 실패"
-                    continue
-                }
-            fi
-            
-            # Whisper 설치 (더 안전한 방법)
-            echo "   🎙️ OpenAI Whisper 설치 중..."
+            echo "   📦 Whisper 설치 중..."
             docker exec -u root $container bash -c "
                 echo '🔧 pip 업그레이드 중...' &&
                 pip3 install --upgrade pip --quiet &&
-                echo '📦 Whisper 설치 중...' &&
-                pip3 install openai-whisper --quiet &&
-                echo '🔗 PATH 설정 중...' &&
-                ln -sf /usr/local/bin/whisper /usr/bin/whisper 2>/dev/null || true
+                echo '🎙️ Whisper 설치 중...' &&
+                pip3 install openai-whisper --quiet
             " > /dev/null 2>&1 || {
                 echo "   ❌ Whisper 설치 실패"
                 continue
             }
             
-            # 🎯 transcribe.js와 동일한 방식으로 설치 확인
-            echo "   🔍 설치 확인 중..."
+            # 재확인
             if docker exec $container python3 -c "import whisper; print('installed')" > /dev/null 2>&1; then
-                echo "   ✅ Whisper Python 모듈 설치 확인 완료"
+                echo "   ✅ Whisper Python 모듈 설치 완료"
             else
                 echo "   ❌ Whisper Python 모듈 설치 실패"
-                
-                # 디버깅 정보
-                echo "   🔍 디버깅 정보:"
-                docker exec $container python3 -c "import sys; print('Python path:', sys.path)" 2>/dev/null || echo "   Python 실행 실패"
-                docker exec $container pip3 list | grep -i whisper || echo "   pip list에서 whisper 없음"
             fi
+        fi
+        
+        # 4. 🎯 핵심: python 명령어로도 Whisper 확인
+        echo "   🔍 python 명령어 Whisper 확인..."
+        if docker exec $container python -c "import whisper; print('installed')" > /dev/null 2>&1; then
+            echo "   ✅ python 명령어로 Whisper 접근 가능"
+        else
+            echo "   ❌ python 명령어로 Whisper 접근 불가"
+        fi
+        
+        # 5. 최종 확인 - 실제 워커 로직과 동일한 테스트
+        echo "   🧪 실제 워커 로직 테스트..."
+        test_result=$(docker exec $container python -m whisper --help 2>&1 | head -1)
+        if [[ $test_result == *"usage: whisper"* ]]; then
+            echo "   ✅ 실제 워커 로직 테스트 성공"
+        else
+            echo "   ❌ 실제 워커 로직 테스트 실패: $test_result"
         fi
         
         echo
     done
     
-    echo "🎯 모든 백엔드 컨테이너 Whisper 설치 확인 완료!"
-    
-    # 최종 API 진단 테스트
-    echo "🧪 API 진단 재테스트..."
-    if curl -s http://localhost:3000/api/diagnose > /dev/null 2>&1; then
-        diagnose_result=$(curl -s http://localhost:3000/api/diagnose)
-        whisper_status=$(echo "$diagnose_result" | grep -o '"whisperInstalled":[^,]*' | cut -d: -f2)
-        echo "📊 API 진단 결과: whisperInstalled = $whisper_status"
-        
-        if [ "$whisper_status" = "false" ]; then
-            echo "❌ 여전히 Whisper 미설치로 감지됨. 추가 디버깅 필요"
-            echo "🔍 컨테이너 내부 Python 환경 확인..."
-            docker exec sayit-direct-backend python3 -c "
-import sys
-print('Python executable:', sys.executable)
-print('Python version:', sys.version)
-try:
-    import whisper
-    print('✅ Whisper 모듈 import 성공')
-    print('Whisper location:', whisper.__file__)
-except ImportError as e:
-    print('❌ Whisper 모듈 import 실패:', e)
-except Exception as e:
-    print('❌ 기타 오류:', e)
-"
-        else
-            echo "✅ Whisper 정상 설치 확인됨"
-        fi
-    else
-        echo "❌ API 진단 호출 실패"
-    fi
+    echo "🎯 모든 백엔드 컨테이너 완전한 Whisper 환경 설정 완료!"
 }
 
 # 큐 시스템 상태 확인 및 정리
