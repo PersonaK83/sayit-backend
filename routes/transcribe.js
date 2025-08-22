@@ -6,8 +6,8 @@ const { spawn } = require('child_process');
 
 // 큐 시스템 import 추가
 const { queueAudioTranscription } = require('../services/audio-processor');
-const resultCollector = require('../services/result-collector');
-const redisResultBridge = require('../services/redis-result-bridge');
+// const resultCollector = require('../services/result-collector'); // ❌ 제거
+const redisResultBridge = require('../services/redis-result-bridge'); // ✅ Redis만 사용
 
 const router = express.Router();
 
@@ -702,7 +702,10 @@ redisResultBridge.on('failed', (data) => {
 // 🎯 Redis 기반 결과 확인 시스템 (기존 이벤트 리스너 대체)
 async function checkRedisResults() {
   try {
+    console.log('🔍 Redis 폴링 실행 중...'); // 디버그 로그 추가
     const completedResults = await redisResultBridge.checkCompletedJobs();
+    
+    console.log(`📋 Redis에서 발견된 완료 작업: ${completedResults.length}개`); // 디버그 로그 추가
     
     for (const data of completedResults) {
       const { jobId, result } = data;
@@ -718,6 +721,8 @@ async function checkRedisResults() {
         
         console.log(`✅ Redis 폴링: 작업 완료 처리 [${jobId}]`);
         console.log(`📝 최종 결과: ${result}`);
+      } else {
+        console.log(`⚠️ 작업 상태 불일치 [${jobId}]: job=${job ? job.status : 'null'}`);
       }
     }
   } catch (error) {
