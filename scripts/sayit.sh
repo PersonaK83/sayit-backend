@@ -917,6 +917,69 @@ testRedis();
     curl -s "http://localhost:3000/api/transcribe/status/job_1755848055335_796e0448" | python3 -m json.tool 2>/dev/null
 }
 
+# 완전한 Redis 시스템 테스트
+test_complete_redis_system() {
+    echo "🧪 완전한 Redis 시스템 테스트..."
+    
+    echo "📋 1. 현재 Redis 상태 확인..."
+    docker exec sayit-redis-m2 redis-cli info memory | grep used_memory_human
+    docker exec sayit-redis-m2 redis-cli keys "completed:*"
+    
+    echo ""
+    echo "📋 2. Direct Backend Redis 폴링 로그 확인..."
+    docker logs sayit-direct-backend --tail 10 | grep -E "(Redis|폴링)" || echo "   → Redis 폴링 로그 없음"
+    
+    echo ""
+    echo "📋 3. 테스트 완료 신호 저장..."
+    docker exec sayit-direct-backend node -e "
+const redis = require('redis');
+
+async function testSystem() {
+  try {
+    const client = redis.createClient({
+      url: 'redis://sayit-redis-m2:6379'
+    });
+    
+    await client.connect();
+    console.log('✅ Redis 연결 성공');
+    
+    const testJobId = 'test_' + Date.now();
+    const key = 'completed:' + testJobId;
+    const data = JSON.stringify({
+      jobId: testJobId,
+      chunkIndex: 0,
+      result: 'Redis 시스템 테스트 결과',
+      timestamp: Date.now()
+    });
+    
+    await client.set(key, data);
+    console.log('📡 테스트 신호 저장:', key);
+    
+    await client.quit();
+  } catch (error) {
+    console.error('❌ 테스트 실패:', error);
+  }
+}
+
+testSystem();
+" 2>/dev/null
+    
+    echo ""
+    echo "📋 4. 10초 후 폴링 결과 확인..."
+    sleep 10
+    
+    echo "📋 5. Redis에 남은 completed 키 확인..."
+    remaining=$(docker exec sayit-redis-m2 redis-cli keys "completed:*" | wc -l)
+    echo "   → 남은 completed 키: $remaining 개"
+    
+    if [ "$remaining" -eq 0 ]; then
+        echo "✅ Redis 폴링 시스템 정상 작동!"
+    else
+        echo "❌ Redis 폴링 시스템 미작동 (키가 삭제되지 않음)"
+        docker exec sayit-redis-m2 redis-cli keys "completed:*"
+    fi
+}
+
 show_menu() {
     echo "========================================="
     echo "   🍎 SayIt M2 분산처리 관리자"
@@ -940,6 +1003,7 @@ show_menu() {
     echo "17. 📡 Redis 구독 상태 확인"
     echo "18. 🎯 파일 기반 Redis 적용"
     echo "19. 🧪 Redis 수동 테스트"
+    echo "20. 🔬 완전한 Redis 시스템 테스트"
     echo "0. 종료"
     echo "========================================="
 }
@@ -1227,7 +1291,7 @@ except Exception as e:
 # 메인 루프 업데이트
 while true; do
     show_menu
-    read -p "선택하세요 (0-9): " choice
+    read -p "선택하세요 (0-20): " choice
     
     case $choice in
         1) start_system ;;
@@ -1249,6 +1313,7 @@ while true; do
         17) check_redis_subscription ;;
         18) apply_file_based_redis_fix ;;
         19) test_redis_manually ;;
+        20) test_complete_redis_system ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
