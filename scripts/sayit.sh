@@ -422,150 +422,97 @@ req.end();
     fi
 }
 
-# Redis 기반 결과 전달 시스템 적용
+# Redis 기반 결과 전달 시스템 적용 (개선)
 apply_redis_fix() {
     echo "🔧 Redis 기반 결과 전달 시스템 적용 중..."
     
-    # 1. Redis Result Bridge 파일 생성
-    echo "📝 Redis Result Bridge 생성 중..."
-    cat > services/redis-result-bridge.js << 'REDIS_BRIDGE_EOF'
+    # 1. 백업 생성
+    echo "💾 기존 파일 백업 중..."
+    cp services/transcription-queue.js services/transcription-queue.js.backup
+    cp routes/transcribe.js routes/transcribe.js.backup
+    
+    # 2. transcription-queue.js에서 Redis 전송 방식으로 수정
+    echo "🔧 transcription-queue.js 수정 중..."
+    
+    # resultCollector.collectChunkResult 부분을 Redis publish로 교체
+    sed -i.tmp '/resultCollector\.collectChunkResult/c\
+    // Redis를 통한 결과 전달\
+    try {\
+      const redis = require("redis");\
+      const redisClient = redis.createClient({\
+        host: process.env.REDIS_HOST || "sayit-redis-m2",\
+        port: process.env.REDIS_PORT || 6379\
+      });\
+      await redisClient.connect();\
+      \
+      const message = {\
+        jobId,\
+        chunkIndex,\
+        result: result.text,\
+        timestamp: Date.now()\
+      };\
+      \
+      await redisClient.publish("chunk-results", JSON.stringify(message));\
+      console.log(`📡 Redis로 청크 결과 전송 [${jobId}] 청크 ${chunkIndex}`);\
+      await redisClient.quit();\
+    } catch (redisError) {\
+      console.error(`❌ Redis 결과 전송 실패:`, redisError);\
+    }' services/transcription-queue.js
+    
+    # 3. routes/transcribe.js에 Redis 구독 리스너 추가
+    echo "🔧 routes/transcribe.js에 Redis 구독 추가 중..."
+    
+    # Redis 구독 코드를 파일 끝에 추가
+    cat >> routes/transcribe.js << 'REDIS_LISTENER_EOF'
+
+// 🎯 Redis 기반 결과 수신 시스템
 const redis = require('redis');
-const EventEmitter = require('events');
 
-class RedisResultBridge extends EventEmitter {
-  constructor() {
-    super();
-    this.redisClient = null;
-    this.subscriber = null;
-    this.jobs = new Map();
-    this.connect();
-  }
-
-  async connect() {
-    try {
-      this.redisClient = redis.createClient({
-        host: process.env.REDIS_HOST || 'sayit-redis-m2',
-        port: process.env.REDIS_PORT || 6379
-      });
-
-      this.subscriber = redis.createClient({
-        host: process.env.REDIS_HOST || 'sayit-redis-m2',
-        port: process.env.REDIS_PORT || 6379
-      });
-
-      await this.redisClient.connect();
-      await this.subscriber.connect();
-
-      await this.subscriber.subscribe('chunk-results', (message) => {
-        this.handleChunkResult(JSON.parse(message));
-      });
-
-      console.log('✅ Redis Result Bridge 연결 성공');
-    } catch (error) {
-      console.error('❌ Redis Result Bridge 연결 실패:', error);
-    }
-  }
-
-  registerJob(jobId, totalChunks) {
-    this.jobs.set(jobId, {
-      chunks: new Array(totalChunks).fill(null),
-      totalChunks,
-      completedChunks: 0,
-      createdAt: Date.now()
-    });
-    console.log(`📋 Redis Bridge 작업 등록 [${jobId}]: ${totalChunks}개 청크`);
-  }
-
-  async sendChunkResult(jobId, chunkIndex, result) {
-    try {
-      const message = {
-        jobId,
-        chunkIndex,
-        result,
-        timestamp: Date.now()
-      };
-
-      await this.redisClient.publish('chunk-results', JSON.stringify(message));
-      console.log(`📡 Redis로 청크 결과 전송 [${jobId}] 청크 ${chunkIndex}`);
-    } catch (error) {
-      console.error(`❌ Redis 청크 결과 전송 실패 [${jobId}]:`, error);
-    }
-  }
-
-  handleChunkResult(message) {
-    const { jobId, chunkIndex, result } = message;
-    const job = this.jobs.get(jobId);
-
-    if (!job) {
-      console.warn(`⚠️ Redis Bridge: 알 수 없는 작업 ID: ${jobId}`);
-      return;
-    }
-
-    console.log(`📥 Redis에서 청크 결과 수신 [${jobId}] 청크 ${chunkIndex}`);
-
-    job.chunks[chunkIndex] = result;
-    job.completedChunks++;
-
-    const progress = (job.completedChunks / job.totalChunks) * 100;
-
-    this.emit('progress', {
-      jobId,
-      progress,
-      completedChunks: job.completedChunks,
-      totalChunks: job.totalChunks,
-      status: 'processing'
+async function setupRedisResultListener() {
+  try {
+    const subscriber = redis.createClient({
+      host: process.env.REDIS_HOST || 'sayit-redis-m2',
+      port: process.env.REDIS_PORT || 6379
     });
 
-    if (job.completedChunks === job.totalChunks) {
-      console.log(`🎉 Redis Bridge: 모든 청크 완료 [${jobId}]`);
+    await subscriber.connect();
+    
+    await subscriber.subscribe('chunk-results', (message) => {
+      try {
+        const { jobId, chunkIndex, result } = JSON.parse(message);
+        console.log(`📥 Redis에서 청크 결과 수신 [${jobId}] 청크 ${chunkIndex}`);
+        
+        // transcriptionJobs 상태 업데이트
+        const job = transcriptionJobs.get(jobId);
+        if (job) {
+          // 간단한 완료 처리 (1개 청크이므로)
+          job.status = JobStatus.COMPLETED;
+          job.completedAt = Date.now();
+          job.transcript = result;
+          job.error = null;
+          transcriptionJobs.set(jobId, job);
+          
+          console.log(`✅ Redis 기반 작업 상태 업데이트 완료 [${jobId}]: ${JobStatus.COMPLETED}`);
+          console.log(`📝 최종 결과: ${result}`);
+        } else {
+          console.warn(`⚠️ Redis 수신: 작업 ID를 찾을 수 없음: ${jobId}`);
+        }
+      } catch (parseError) {
+        console.error('❌ Redis 메시지 파싱 실패:', parseError);
+      }
+    });
 
-      const validChunks = job.chunks.filter(chunk => chunk !== null && chunk.trim() !== '');
-      const finalResult = validChunks.join(' ').trim();
-
-      console.log(`✅ Redis Bridge 최종 결과 [${jobId}]: ${finalResult.length}자`);
-
-      this.emit('completed', {
-        jobId,
-        result: finalResult,
-        totalChunks: job.totalChunks,
-        processingTime: Date.now() - job.createdAt
-      });
-
-      this.jobs.delete(jobId);
-    }
-  }
-
-  async disconnect() {
-    if (this.redisClient) await this.redisClient.quit();
-    if (this.subscriber) await this.subscriber.quit();
+    console.log('✅ Redis 결과 구독 리스너 설정 완료');
+  } catch (error) {
+    console.error('❌ Redis 구독 설정 실패:', error);
   }
 }
 
-module.exports = new RedisResultBridge();
-REDIS_BRIDGE_EOF
+// Redis 리스너 시작
+setupRedisResultListener();
+REDIS_LISTENER_EOF
     
-    echo "✅ Redis Result Bridge 생성 완료"
-    
-    # 2. transcription-queue.js 수정
-    echo "🔧 transcription-queue.js 수정 중..."
-    
-    # resultCollector를 redisResultBridge로 교체
-    sed -i.bak 's/const resultCollector = require(.*/const redisResultBridge = require("..\/redis-result-bridge");/' services/transcription-queue.js
-    sed -i.bak 's/resultCollector\.collectChunkResult/await redisResultBridge.sendChunkResult/' services/transcription-queue.js
-    
-    echo "✅ transcription-queue.js 수정 완료"
-    
-    # 3. routes/transcribe.js 수정
-    echo "🔧 routes/transcribe.js 수정 중..."
-    
-    # redisResultBridge import 추가 및 이벤트 리스너 교체
-    sed -i.bak '/const resultCollector = require/a\
-const redisResultBridge = require("../services/redis-result-bridge");' routes/transcribe.js
-    
-    # 기존 resultCollector 이벤트를 redisResultBridge로 교체
-    sed -i.bak 's/resultCollector\.on/redisResultBridge.on/g' routes/transcribe.js
-    
-    echo "✅ routes/transcribe.js 수정 완료"
+    echo "✅ Redis 구독 리스너 추가 완료"
     
     # 4. 시스템 재시작
     echo "🔄 Redis 기반 시스템 재시작 중..."
@@ -574,6 +521,29 @@ const redisResultBridge = require("../services/redis-result-bridge");' routes/tr
     start_system
     
     echo "✅ Redis 기반 결과 전달 시스템 적용 완료!"
+    echo "🧪 이제 앱에서 비동기 변환을 다시 테스트해보세요!"
+}
+
+# Redis 구독 상태 확인 함수
+check_redis_subscription() {
+    echo "📡 Redis 구독 상태 확인 중..."
+    
+    # Redis에서 구독자 확인
+    echo "📊 Redis 구독자 정보:"
+    docker exec sayit-redis-m2 redis-cli pubsub channels | grep chunk-results || echo "chunk-results 채널 없음"
+    docker exec sayit-redis-m2 redis-cli pubsub numsub chunk-results
+    
+    # Direct Backend에서 구독 상태 확인
+    echo "🏠 Direct Backend 구독 상태:"
+    docker logs sayit-direct-backend --tail 10 | grep -E "(Redis|구독|subscription)"
+    
+    # 테스트 메시지 전송
+    echo "🧪 테스트 메시지 전송..."
+    docker exec sayit-redis-m2 redis-cli publish chunk-results '{"jobId":"test","chunkIndex":0,"result":"테스트 메시지","timestamp":1234567890}'
+    
+    sleep 2
+    echo "📋 테스트 메시지 수신 확인:"
+    docker logs sayit-direct-backend --tail 5 | grep -E "(테스트|Redis|수신)"
 }
 
 show_menu() {
@@ -596,6 +566,7 @@ show_menu() {
     echo "14. 📡 Result Collector 디버깅"
     echo "15. 🔧 멈춘 작업 복구"
     echo "16. 🚀 Redis 기반 시스템 적용"
+    echo "17. 📡 Redis 구독 상태 확인"
     echo "0. 종료"
     echo "========================================="
 }
@@ -902,6 +873,7 @@ while true; do
         14) debug_result_collector ;;
         15) recover_stuck_jobs ;;
         16) apply_redis_fix ;;
+        17) check_redis_subscription ;;
         0) echo "👋 관리자를 종료합니다."; exit 0 ;;
         *) echo "❌ 잘못된 선택입니다." ;;
     esac
