@@ -31,7 +31,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # Whisper 워커 1 (M2 최적화)
+  # Whisper 워커 1 (큐 처리 전용)
   whisper-worker-1:
     build: 
       context: .
@@ -45,6 +45,7 @@ services:
       - PLATFORM=arm64
       - PYTORCH_ENABLE_MPS_FALLBACK=1
       - OMP_NUM_THREADS=2
+      - WORKER_MODE=queue_only  # 큐 처리 전용
     deploy:
       resources:
         limits:
@@ -62,7 +63,7 @@ services:
     depends_on:
       - redis-cluster
 
-  # Whisper 워커 2
+  # Whisper 워커 2 (큐 처리 전용)
   whisper-worker-2:
     build: 
       context: .
@@ -76,6 +77,7 @@ services:
       - PLATFORM=arm64
       - PYTORCH_ENABLE_MPS_FALLBACK=1
       - OMP_NUM_THREADS=2
+      - WORKER_MODE=queue_only  # 큐 처리 전용
     deploy:
       resources:
         limits:
@@ -93,7 +95,7 @@ services:
     depends_on:
       - redis-cluster
 
-  # Whisper 워커 3
+  # Whisper 워커 3 (큐 처리 전용)
   whisper-worker-3:
     build: 
       context: .
@@ -107,6 +109,7 @@ services:
       - PLATFORM=arm64
       - PYTORCH_ENABLE_MPS_FALLBACK=1
       - OMP_NUM_THREADS=2
+      - WORKER_MODE=queue_only  # 큐 처리 전용
     deploy:
       resources:
         limits:
@@ -150,7 +153,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # 모니터링 (선택사항)
+  # 모니터링
   monitoring:
     image: prom/node-exporter:latest
     container_name: sayit-monitoring
