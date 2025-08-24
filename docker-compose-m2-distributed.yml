@@ -1,35 +1,35 @@
 services:
-  # API Gateway & 로드밸런서
-  api-gateway:
-    build: 
-      context: .
-      dockerfile: Dockerfile.gateway
-    container_name: sayit-gateway-m2
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - REDIS_HOST=redis-cluster
-      - WORKER_NODES=worker-1,worker-2,worker-3
-      - PLATFORM=arm64
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '1'
-        reservations:
-          memory: 512M
-          cpus: '0.5'
-    networks:
-      - sayit-network
-    depends_on:
-      - redis-cluster
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+  # API Gateway 제거 (포트 3000 충돌 방지)
+  # api-gateway:
+  #   build: 
+  #     context: .
+  #     dockerfile: Dockerfile.gateway
+  #   container_name: sayit-gateway-m2
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NODE_ENV=production
+  #     - REDIS_HOST=redis-cluster
+  #     - WORKER_NODES=worker-1,worker-2,worker-3
+  #     - PLATFORM=arm64
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 1G
+  #         cpus: '1'
+  #       reservations:
+  #         memory: 512M
+  #         cpus: '0.5'
+  #   networks:
+  #     - sayit-network
+  #   depends_on:
+  #     - redis-cluster
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
 
   # Whisper 워커 1 (큐 처리 전용)
   whisper-worker-1:
