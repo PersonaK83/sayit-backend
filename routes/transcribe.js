@@ -275,7 +275,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     // 작업 ID 생성
     const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // 작업 등록
+    // 작업 등록 (중요!)
     const job = {
       id: jobId,
       status: JobStatus.PENDING,
@@ -290,10 +290,11 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     };
 
     transcriptionJobs.set(jobId, job);
+    console.log(` 작업 등록 완료 [${jobId}]: ${originalFilename}`);
 
     if (async) {
       // 비동기 처리
-      console.log(`🎙️ 비동기 처리 시작 [${jobId}]`);
+      console.log(` 비동기 처리 시작 [${jobId}]`);
       
       // 백그라운드에서 처리 시작
       transcribeWithLocalWhisperAsync(audioFilePath, jobId, language);
