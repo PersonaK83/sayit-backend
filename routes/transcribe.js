@@ -662,41 +662,41 @@ router.get('/status/:jobId', async (req, res) => {
 });
 
 // 🎯 Redis Result Bridge 이벤트 리스너 (기존 resultCollector 대체)
-redisResultBridge.on('completed', (data) => {
-  const { jobId, result, totalChunks, processingTime } = data;
+// redisResultBridge.on('completed', (data) => {
+//   const { jobId, result, totalChunks, processingTime } = data;
 
-  console.log(`🎯 Redis 큐 시스템 작업 완료 [${jobId}]`);
-  console.log(`📊 처리 시간: ${Math.round(processingTime / 1000)}초`);
-  console.log(`📝 최종 결과: ${result.length}자`);
+//   console.log(`🎯 Redis 큐 시스템 작업 완료 [${jobId}]`);
+//   console.log(`📊 처리 시간: ${Math.round(processingTime / 1000)}초`);
+//   console.log(`📝 최종 결과: ${result.length}자`);
 
-  // transcriptionJobs 상태 업데이트
-  const job = transcriptionJobs.get(jobId);
-  if (job) {
-    job.status = JobStatus.COMPLETED;
-    job.completedAt = Date.now();
-    job.transcript = result;
-    job.error = null;
-    transcriptionJobs.set(jobId, job);
+//   // transcriptionJobs 상태 업데이트
+//   const job = transcriptionJobs.get(jobId);
+//   if (job) {
+//     job.status = JobStatus.COMPLETED;
+//     job.completedAt = Date.now();
+//     job.transcript = result;
+//     job.error = null;
+//     transcriptionJobs.set(jobId, job);
 
-    console.log(`✅ 작업 상태 업데이트 완료 [${jobId}]: ${JobStatus.COMPLETED}`);
-  } else {
-    console.warn(`⚠️ 작업 ID를 찾을 수 없음: ${jobId}`);
-  }
-});
+//     console.log(`✅ 작업 상태 업데이트 완료 [${jobId}]: ${JobStatus.COMPLETED}`);
+//   } else {
+//     console.warn(`⚠️ 작업 ID를 찾을 수 없음: ${jobId}`);
+//   }
+// });
 
-redisResultBridge.on('failed', (data) => {
-  const { jobId, error } = data;
+// redisResultBridge.on('failed', (data) => {
+//   const { jobId, error } = data;
 
-  console.log(`❌ Redis 큐 시스템 작업 실패 [${jobId}]: ${error}`);
+//   console.log(`❌ Redis 큐 시스템 작업 실패 [${jobId}]: ${error}`);
 
-  const job = transcriptionJobs.get(jobId);
-  if (job) {
-    job.status = JobStatus.FAILED;
-    job.completedAt = Date.now();
-    job.error = error;
-    transcriptionJobs.set(jobId, job);
-  }
-});
+//   const job = transcriptionJobs.get(jobId);
+//   if (job) {
+//     job.status = JobStatus.FAILED;
+//     job.completedAt = Date.now();
+//     job.error = error;
+//     transcriptionJobs.set(jobId, job);
+//   }
+// });
 
 // 🎯 독립적인 Redis 폴링 시스템 (import 없이)
 const redis = require('redis');
@@ -712,45 +712,4 @@ async function checkRedisResults() {
     await redisClient.connect();
     
     const completedKeys = await redisClient.keys('completed:*');
-    console.log(`📋 Redis에서 발견된 완료 작업: ${completedKeys.length}개`);
-    
-    for (const key of completedKeys) {
-      try {
-        const resultData = await redisClient.get(key);
-        if (resultData) {
-          const data = JSON.parse(resultData);
-          const { jobId, result } = data;
-          
-          const job = transcriptionJobs.get(jobId);
-          if (job && job.status === JobStatus.PROCESSING) {
-            job.status = JobStatus.COMPLETED;
-            job.completedAt = Date.now();
-            job.transcript = result;
-            job.error = null;
-            transcriptionJobs.set(jobId, job);
-            
-            console.log(`✅ Redis 폴링: 작업 완료 처리 [${jobId}]`);
-            console.log(`📝 최종 결과: ${result}`);
-          }
-          
-          // 처리된 키 삭제
-          await redisClient.del(key);
-        }
-      } catch (parseError) {
-        console.error('❌ Redis 결과 파싱 실패:', parseError);
-      }
-    }
-    
-    await redisClient.quit();
-    
-  } catch (error) {
-    console.error('❌ Redis 결과 확인 실패:', error);
-  }
-}
-
-// 5초마다 Redis 결과 확인
-setInterval(checkRedisResults, 5000);
-console.log('✅ Redis 폴링 시스템 시작 (5초 간격)');
-
-module.exports = router;
-module.exports.transcribeWithLocalWhisperAsync = transcribeWithLocalWhisperAsync;
+    console.log(`
