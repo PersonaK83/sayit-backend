@@ -4,7 +4,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const { spawn } = require('child_process');
 
-// ❌ 모든 circular dependency 가능성 제거
+// ❌ 모든 외부 import 제거 (circular dependency 방지)
 // const { queueAudioTranscription } = require('../services/audio-processor');
 // const redisResultBridge = require('../services/redis-result-bridge');
 
@@ -704,23 +704,23 @@ const redis = require('redis');
 async function checkRedisResults() {
   try {
     console.log('🔍 Redis 폴링 실행 중...');
-
+    
     const redisClient = redis.createClient({
       url: 'redis://sayit-redis-m2:6379'
     });
-
+    
     await redisClient.connect();
-
+    
     const completedKeys = await redisClient.keys('completed:*');
     console.log(`📋 Redis에서 발견된 완료 작업: ${completedKeys.length}개`);
-
+    
     for (const key of completedKeys) {
       try {
         const resultData = await redisClient.get(key);
         if (resultData) {
           const data = JSON.parse(resultData);
           const { jobId, result } = data;
-
+          
           const job = transcriptionJobs.get(jobId);
           if (job && job.status === JobStatus.PROCESSING) {
             job.status = JobStatus.COMPLETED;
@@ -728,11 +728,11 @@ async function checkRedisResults() {
             job.transcript = result;
             job.error = null;
             transcriptionJobs.set(jobId, job);
-
+            
             console.log(`✅ Redis 폴링: 작업 완료 처리 [${jobId}]`);
             console.log(`📝 최종 결과: ${result}`);
           }
-
+          
           // 처리된 키 삭제
           await redisClient.del(key);
         }
@@ -740,9 +740,9 @@ async function checkRedisResults() {
         console.error('❌ Redis 결과 파싱 실패:', parseError);
       }
     }
-
+    
     await redisClient.quit();
-
+    
   } catch (error) {
     console.error('❌ Redis 결과 확인 실패:', error);
   }

@@ -1,7 +1,8 @@
 const Queue = require('bull');
 const redis = require('redis');
 const { spawn } = require('child_process');
-const redisResultBridge = require('./redis-result-bridge');
+// ❌ redisResultBridge import 제거
+// const redisResultBridge = require('./redis-result-bridge');
 
 // Redis 연결 설정
 const redisConfig = {
@@ -144,9 +145,8 @@ transcriptionQueue.process('chunk', 5, async (job) => {
     console.log(`✅ 청크 처리 완료 [${jobId}] ${chunkIndex + 1}/${totalChunks} (${progress.toFixed(1)}%)`);
     console.log(`📝 청크 결과: ${result.text?.substring(0, 100)}...`);
     
-    // 🎯 Redis를 통한 결과 전달 (기존 resultCollector 대체)
-    const redisResultBridge = require('./redis-result-bridge');
-    await redisResultBridge.saveChunkResult(jobId, chunkIndex, result.text);
+    // 🎯 Redis를 통한 결과 전달 (독립적으로 구현)
+    await saveChunkResult(jobId, chunkIndex, result.text);
     
     return {
       chunkIndex,
@@ -159,7 +159,7 @@ transcriptionQueue.process('chunk', 5, async (job) => {
     console.error(`❌ 청크 처리 실패 [${jobId}] ${chunkIndex + 1}/${totalChunks}:`, error.message);
     
     // 실패한 청크도 Redis로 전달
-    await redisResultBridge.saveChunkResult(jobId, chunkIndex, `[청크 ${chunkIndex + 1} 처리 실패]`);
+    await saveChunkResult(jobId, chunkIndex, `[청크 ${chunkIndex + 1} 처리 실패]`);
     
     throw error;
   }
@@ -192,5 +192,34 @@ process.on('SIGTERM', async () => {
   console.log('🛑 큐 시스템 종료 중...');
   await transcriptionQueue.close();
 });
+
+//  Redis를 통한 결과 전달 (독립적으로 구현)
+async function saveChunkResult(jobId, chunkIndex, result) {
+  try {
+    const redisClient = redis.createClient({
+      url: 'redis://sayit-redis-m2:6379'
+    });
+    
+    await redisClient.connect();
+    
+    const completedKey = `completed:${jobId}`;
+    const completedData = {
+      jobId,
+      chunkIndex,
+      result,
+      timestamp: Date.now()
+    };
+    
+    await redisClient.set(completedKey, JSON.stringify(completedData));
+    await redisClient.expire(completedKey, 3600);
+    
+    console.log(`📡 Redis에 청크 결과 저장 [${jobId}] 청크 ${chunkIndex}`);
+    
+    await redisClient.quit();
+    
+  } catch (error) {
+    console.error(`❌ Redis 결과 저장 실패 [${jobId}]:`, error);
+  }
+}
 
 module.exports = transcriptionQueue; 
