@@ -256,12 +256,17 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     const originalFilename = req.file.originalname;
     const fileSize = req.file.size;
     const language = req.body.language || 'auto';
-    const async = req.body.async === 'true';
+    
+    // 🔧 파일 크기 기반 자동 판단 로직 추가
+    const fileSizeKB = fileSize / 1024;
+    const shouldUseAsync = fileSizeKB > 100; // 100KB 초과시 비동기
+    const async = req.body.async === 'true' || shouldUseAsync;
 
     console.log('📁 업로드된 파일:', originalFilename);
-    console.log('📁 파일 크기:', fileSize, 'bytes');
+    console.log('📁 파일 크기:', fileSize, 'bytes (', fileSizeKB.toFixed(1), 'KB)');
     console.log('🌐 언어 설정:', language);
-    console.log('⚡ 비동기 모드:', async);
+    console.log('⚡ 처리 방식:', async ? '비동기' : '동기');
+    console.log('🔧 자동 판단:', shouldUseAsync ? '파일 크기로 인한 비동기' : '요청에 따른 처리');
 
     // Whisper 설치 확인
     const whisperInstalled = await checkWhisperInstallation();
@@ -304,7 +309,8 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
         status: 'processing',
         message: '음성 변환이 시작되었습니다.',
         originalFilename,
-        fileSize
+        fileSize,
+        reason: shouldUseAsync ? '파일 크기로 인한 자동 비동기 처리' : '사용자 요청에 따른 비동기 처리'
       });
     } else {
       // 동기 처리
