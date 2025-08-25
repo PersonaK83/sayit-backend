@@ -5,9 +5,8 @@ const transcriptionQueue = require('./transcription-queue');
 // ❌ result-collector import 완전 제거
 const { generateJobId, formatFileSize, formatDuration } = require('./utils');
 
-// 오디오 파일 분할
-async function splitAudioFile(audioFilePath, chunkDuration = 120) { // 2분 청크
-  const jobId = generateJobId();
+// 오디오 파일 분할 (JobId를 외부에서 받음)
+async function splitAudioFile(audioFilePath, jobId, chunkDuration = 120) { // JobId 매개변수 추가
   const outputDir = path.join(__dirname, '../temp', jobId);
   
   console.log(`🔪 오디오 파일 분할 시작 [${jobId}]`);
@@ -19,14 +18,13 @@ async function splitAudioFile(audioFilePath, chunkDuration = 120) { // 2분 청�
   
   return new Promise((resolve, reject) => {
     ffmpeg(audioFilePath)
-      // 입력 형식을 자동 감지하도록 수정
       .outputOptions([
         '-f segment',
         `-segment_time ${chunkDuration}`,
         '-segment_format mp3',
         '-reset_timestamps 1',
-        '-acodec libmp3lame', // AAC를 MP3로 변환
-        '-ab 128k' // 비트레이트 설정
+        '-acodec libmp3lame',
+        '-ab 128k'
       ])
       .output(path.join(outputDir, 'chunk_%03d.mp3'))
       .on('start', (commandLine) => {
@@ -41,7 +39,6 @@ async function splitAudioFile(audioFilePath, chunkDuration = 120) { // 2분 청�
         try {
           console.log(`✅ 파일 분할 완료 [${jobId}]`);
           
-          // 생성된 청크 파일 목록 가져오기
           const files = await fs.readdir(outputDir);
           const chunkFiles = files
             .filter(f => f.startsWith('chunk_'))
@@ -67,34 +64,32 @@ async function splitAudioFile(audioFilePath, chunkDuration = 120) { // 2분 청�
   });
 }
 
-// 큐에 청크 작업 등록
-async function queueAudioTranscription(audioFilePath, language = 'auto') {
+// 큐에 청크 작업 등록 (JobId를 외부에서 받음)
+async function queueAudioTranscription(audioFilePath, jobId, language = 'auto') {
   try {
     console.log('🚀 큐 기반 음성 변환 시작');
     console.log(`📁 파일: ${audioFilePath}`);
+    console.log(`🎯 JobId: ${jobId}`);
     console.log(`🌐 언어: ${language}`);
     
-    // 1. 파일 분할
-    const { jobId, chunkFiles, outputDir } = await splitAudioFile(audioFilePath);
+    // 1. 파일 분할 (JobId 전달)
+    const { chunkFiles, outputDir } = await splitAudioFile(audioFilePath, jobId);
     
-    // 2. 결과 수집기에 작업 등록
-    // resultCollector.registerJob(jobId, chunkFiles.length); // ❌ 제거
-    
-    // 3. 각 청크를 큐에 등록
+    // 2. 각 청크를 큐에 등록
     const chunkJobs = [];
     for (let index = 0; index < chunkFiles.length; index++) {
       const chunkPath = chunkFiles[index];
       
       const job = await transcriptionQueue.add('chunk', {
         chunkPath,
-        jobId,
+        jobId, // 동일한 JobId 사용
         chunkIndex: index,
         totalChunks: chunkFiles.length,
         language,
         outputDir
       }, {
-        priority: 10 - index, // 첫 번째 청크가 높은 우선순위
-        delay: index * 500,    // 0.5초씩 지연하여 부하 분산
+        priority: 10 - index,
+        delay: index * 500,
       });
       
       chunkJobs.push(job);
@@ -102,13 +97,7 @@ async function queueAudioTranscription(audioFilePath, language = 'auto') {
     }
     
     console.log(`🎯 큐 등록 완료 [${jobId}]: ${chunkFiles.length}개 청크`);
-    
-    return {
-      jobId,
-      totalChunks: chunkFiles.length,
-      queuedJobs: chunkJobs,
-      outputDir
-    };
+    return { jobId, chunkCount: chunkFiles.length, chunkJobs };
     
   } catch (error) {
     console.error('❌ 큐 등록 실패:', error);
@@ -116,19 +105,19 @@ async function queueAudioTranscription(audioFilePath, language = 'auto') {
   }
 }
 
-// 임시 파일 정리 함수
+// 임시 파일 정리
 async function cleanupTempFiles(outputDir) {
   try {
-    if (outputDir && await fs.access(outputDir).then(() => true).catch(() => false)) {
-      await fs.rmdir(outputDir, { recursive: true });
-      console.log(`🧹 임시 파일 정리 완료: ${outputDir}`);
-    }
+    console.log(`🧹 임시 파일 정리: ${outputDir}`);
+    await fs.rmdir(outputDir, { recursive: true });
+    console.log('✅ 임시 파일 정리 완료');
   } catch (error) {
-    console.error(`❌ 임시 파일 정리 실패: ${error.message}`);
+    console.error('❌ 임시 파일 정리 실패:', error);
   }
 }
 
 module.exports = {
+  splitAudioFile,
   queueAudioTranscription,
-  cleanupTempFiles // 내부 함수로 export
+  cleanupTempFiles
 };
