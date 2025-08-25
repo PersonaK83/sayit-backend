@@ -257,16 +257,16 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     const fileSize = req.file.size;
     const language = req.body.language || 'auto';
     
-    //  파일 크기 기반 자동 판단 로직
+    // 🔧 파일 크기 기반 자동 판단 로직
     const fileSizeKB = fileSize / 1024;
     const shouldUseAsync = fileSizeKB > 100; // 100KB 초과시 비동기
     const async = req.body.async === 'true' || shouldUseAsync;
 
     console.log('📁 업로드된 파일:', originalFilename);
-    console.log(' 파일 크기:', fileSize, 'bytes (', fileSizeKB.toFixed(1), 'KB)');
+    console.log('📊 파일 크기:', fileSize, 'bytes (', fileSizeKB.toFixed(1), 'KB)');
     console.log('🌐 언어 설정:', language);
     console.log('⚡ 처리 방식:', async ? '비동기' : '동기');
-    console.log(' 자동 판단:', shouldUseAsync ? '파일 크기로 인한 비동기' : '요청에 따른 처리');
+    console.log('🎯 자동 판단:', shouldUseAsync ? '파일 크기로 인한 비동기' : '요청에 따른 처리');
 
     // Whisper 설치 확인
     const whisperInstalled = await checkWhisperInstallation();
@@ -282,7 +282,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
 
     if (async) {
       // 🔧 비동기 처리
-      console.log(` 비동기 처리 시작 [${jobId}]`);
+      console.log(`🔄 비동기 처리 시작 [${jobId}]`);
       
       // 작업 등록
       const job = {
@@ -299,7 +299,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       };
 
       transcriptionJobs.set(jobId, job);
-      console.log(` 작업 등록 완료 [${jobId}]: ${originalFilename}`);
+      console.log(`📝 작업 등록 완료 [${jobId}]: ${originalFilename}`);
       
       // 백그라운드에서 처리 시작 (await 없음)
       transcribeWithLocalWhisperAsync(audioFilePath, jobId, language);
@@ -333,7 +333,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       };
 
       transcriptionJobs.set(jobId, job);
-      console.log(` 작업 등록 완료 [${jobId}]: ${originalFilename}`);
+      console.log(`📝 작업 등록 완료 [${jobId}]: ${originalFilename}`);
       
       // 동기적으로 변환 실행 (await 사용)
       const result = await transcribeWithLocalWhisperAsync(audioFilePath, jobId, language);
