@@ -144,7 +144,7 @@ services:
     container_name: sayit-direct-backend
     restart: unless-stopped
     ports:
-      - "3000:3000"  # Gateway 대신 직접 노출
+      - "3000:3000"
     environment:
       - WORKER_ID=Direct-Backend
       - REDIS_HOST=redis-cluster
@@ -152,9 +152,9 @@ services:
       - PLATFORM=arm64
       - PYTORCH_ENABLE_MPS_FALLBACK=1
       - OMP_NUM_THREADS=4
-      - WORKER_MODE=api_only  # ✅ 큐 처리 제외
+      - WORKER_MODE=api_only
       - CONTAINER_NAME=Direct-Backend
-      - QUEUE_PROCESSING=false  # ✅ 큐 처리 비활성화
+      - QUEUE_PROCESSING=false
     deploy:
       resources:
         limits:
@@ -166,8 +166,11 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./temp:/app/temp
-      - ./services:/app/services          # ✅ 소스 코드 마운트
-      - ./routes:/app/routes              # ✅ 라우트 마운트
+      - ./services:/app/services
+      - ./routes:/app/routes
+      - ./server.js:/app/server.js              # ✅ server.js 마운트 추가
+      - ./middleware:/app/middleware            # ✅ middleware 마운트 추가
+      - ./package.json:/app/package.json        # ✅ package.json 마운트 추가
       - whisper_cache_direct:/tmp/whisper
     networks:
       - sayit-network

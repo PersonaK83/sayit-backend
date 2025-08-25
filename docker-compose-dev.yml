@@ -1,0 +1,27 @@
+ version: '3.8'
+services:
+  direct-backend:
+    build: 
+      context: .
+      dockerfile: Dockerfile.m2
+    container_name: sayit-direct-backend-dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - WORKER_ID=Direct-Backend
+      - REDIS_HOST=redis-cluster
+      - WORKER_MODE=api_only
+      - CONTAINER_NAME=Direct-Backend
+      - QUEUE_PROCESSING=false
+    volumes:
+      # ✅ 개발용 전체 소스 마운트
+      - .:/app
+      - /app/node_modules
+      - whisper_cache_direct:/tmp/whisper
+    command: ["npm", "run", "dev:docker"]
+    networks:
+      - sayit-network
+    depends_on:
+      - redis-cluster
