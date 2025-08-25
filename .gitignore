@@ -1,12 +1,25 @@
+# 임시 파일
+temp/
+uploads/
+*.log
+*.tmp
+
+# Node modules (이미 있을 수 있음)
 node_modules/
+
+# Docker 관련
 .env
 .env.local
-uploads/*.aac
-uploads/*.wav
-uploads/*.mp3
-uploads/*.m4a
+
+# 큰 바이너리 파일
+*.mp3
+*.mp4
+*.wav
+*.aac
+*.txt
+
 .DS_Store
-*.log
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
