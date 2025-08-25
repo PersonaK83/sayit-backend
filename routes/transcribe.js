@@ -470,6 +470,9 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     const fileSizeKB = fileSize / 1024;
     const estimatedDuration = estimateDurationFromSize(fileSizeKB);
 
+    // 작업 ID 생성
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
     // 30초 기준으로 동기/비동기 결정
     const shouldUseAsync = estimatedDuration > 30 || req.body.async === 'true';
 
@@ -490,8 +493,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       });
     }
 
-    // 작업 ID 생성
-    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
 
     if (shouldUseAsync) {
       // 🔧 분산처리 (큐 시스템 사용)

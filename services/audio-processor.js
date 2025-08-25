@@ -5,32 +5,8 @@ const transcriptionQueue = require('./transcription-queue');
 // ❌ result-collector import 완전 제거
 const { generateJobId, formatFileSize, formatDuration } = require('./utils');
 
-// 파일 길이에 따른 동적 청크 크기
-function calculateOptimalChunkDuration(estimatedDurationSeconds) {
-  if (estimatedDurationSeconds <= 180) {        // 3분 이하
-    return 45;  // 45초 청크
-  } else if (estimatedDurationSeconds <= 600) { // 10분 이하
-    return 60;  // 1분 청크
-  } else {                                      // 10분 초과
-    return 90;  // 1.5분 청크
-  }
-}
-
-async function splitAudioFile(audioFilePath, jobId, customChunkDuration = null) {
-  let chunkDuration = 60; // 기본값
-  
-  if (customChunkDuration) {
-    chunkDuration = customChunkDuration;
-  } else {
-    // 파일 크기로 최적 청크 크기 계산
-    const stats = await fs.stat(audioFilePath);
-    const fileSizeKB = stats.size / 1024;
-    const estimatedDuration = fileSizeKB / 2.1;
-    chunkDuration = calculateOptimalChunkDuration(estimatedDuration);
-  }
-  
-  console.log(`🔪 청크 크기: ${chunkDuration}초 (파일 크기: ${fileSizeKB.toFixed(1)}KB)`);
-  
+// 오디오 파일 분할 (JobId를 외부에서 받음)
+async function splitAudioFile(audioFilePath, jobId, chunkDuration = 90) { // JobId 매개변수 추가
   const outputDir = path.join(__dirname, '../temp', jobId);
   
   console.log(`🔪 오디오 파일 분할 시작 [${jobId}]`);
