@@ -90,7 +90,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // API 라우트
-app.use('/api/transcribe', transcribeRoutes);
+app.use('/api', transcribeRoutes);
 
 // 404 및 에러 핸들러
 app.use(notFound);
