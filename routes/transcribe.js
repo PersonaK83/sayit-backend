@@ -197,11 +197,24 @@ function estimateDurationFromSize(fileSizeKB) {
   return Math.ceil(fileSizeKB / ACTUAL_RATIO);
 }
 
-// 파일 크기 기반 예상 청크 수 계산
+// 동적 청크 크기 계산 (audio-processor.js와 동일)
+function calculateOptimalChunkDuration(estimatedDurationSeconds) {
+  if (estimatedDurationSeconds <= 60) {        // 1분 이하
+    return 30;  // 30초 청크
+  } else if (estimatedDurationSeconds <= 180) { // 3분 이하
+    return 45;  // 45초 청크
+  } else if (estimatedDurationSeconds <= 600) { // 10분 이하
+    return 60;  // 1분 청크
+  } else {                                      // 10분 초과
+    return 90;  // 1.5분 청크
+  }
+}
+
+// 파일 크기 기반 예상 청크 수 계산 (동적 청크 크기 반영)
 function estimateChunkCount(fileSize) {
   const fileSizeKB = fileSize / 1024;
   const estimatedDurationSeconds = estimateDurationFromSize(fileSizeKB);
-  const chunkDurationSeconds = 60; // 1분 청크
+  const chunkDurationSeconds = calculateOptimalChunkDuration(estimatedDurationSeconds);
   
   const estimatedChunks = Math.ceil(estimatedDurationSeconds / chunkDurationSeconds);
   

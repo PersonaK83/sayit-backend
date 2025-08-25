@@ -5,13 +5,61 @@ const transcriptionQueue = require('./transcription-queue');
 // ❌ result-collector import 완전 제거
 const { generateJobId, formatFileSize, formatDuration } = require('./utils');
 
-// 오디오 파일 분할 (JobId를 외부에서 받음)
-async function splitAudioFile(audioFilePath, jobId, chunkDuration = 90) { // JobId 매개변수 추가
+// 실제 데이터 기반 시간 계산
+function estimateDurationFromSize(fileSizeKB) {
+  // 실제 측정: 2.1KB/초
+  const ACTUAL_RATIO = 2.1; // KB per second
+  return Math.ceil(fileSizeKB / ACTUAL_RATIO);
+}
+
+// 파일 길이에 따른 동적 청크 크기 계산
+function calculateOptimalChunkDuration(estimatedDurationSeconds) {
+  console.log(`📊 예상 파일 길이: ${estimatedDurationSeconds}초`);
+  
+  if (estimatedDurationSeconds <= 60) {        // 1분 이하
+    console.log(`🎯 청크 전략: 짧은 파일 - 30초 청크`);
+    return 30;  // 30초 청크 (2개 청크)
+  } else if (estimatedDurationSeconds <= 180) { // 3분 이하
+    console.log(`🎯 청크 전략: 보통 파일 - 45초 청크`);
+    return 45;  // 45초 청크 (3-4개 청크)
+  } else if (estimatedDurationSeconds <= 600) { // 10분 이하
+    console.log(`🎯 청크 전략: 긴 파일 - 60초 청크`);
+    return 60;  // 1분 청크 (최대 10개 청크)
+  } else {                                      // 10분 초과
+    console.log(`🎯 청크 전략: 매우 긴 파일 - 90초 청크`);
+    return 90;  // 1.5분 청크
+  }
+}
+
+// 오디오 파일 분할 (동적 청크 크기 적용)
+async function splitAudioFile(audioFilePath, jobId, customChunkDuration = null) {
   const outputDir = path.join(__dirname, '../temp', jobId);
   
   console.log(`🔪 오디오 파일 분할 시작 [${jobId}]`);
   console.log(`📁 입력 파일: ${audioFilePath}`);
   console.log(`📂 출력 디렉토리: ${outputDir}`);
+  
+  let chunkDuration = 60; // 기본값
+  
+  if (customChunkDuration) {
+    chunkDuration = customChunkDuration;
+    console.log(`🎛️ 수동 청크 크기: ${chunkDuration}초`);
+  } else {
+    // 파일 크기로 최적 청크 크기 계산
+    try {
+      const stats = await fs.stat(audioFilePath);
+      const fileSizeKB = stats.size / 1024;
+      const estimatedDuration = estimateDurationFromSize(fileSizeKB);
+      chunkDuration = calculateOptimalChunkDuration(estimatedDuration);
+      
+      console.log(`📊 파일 크기: ${fileSizeKB.toFixed(1)}KB`);
+      console.log(`⏱️ 예상 길이: ${estimatedDuration}초`);
+      console.log(`🎯 최적 청크 크기: ${chunkDuration}초`);
+    } catch (error) {
+      console.warn(`⚠️ 파일 크기 분석 실패, 기본 청크 크기 사용: ${chunkDuration}초`);
+      console.warn(`오류: ${error.message}`);
+    }
+  }
   
   // 임시 디렉토리 생성
   await fs.mkdir(outputDir, { recursive: true });
@@ -45,7 +93,7 @@ async function splitAudioFile(audioFilePath, jobId, chunkDuration = 90) { // Job
             .sort()
             .map(f => path.join(outputDir, f));
           
-          console.log(`📋 생성된 청크: ${chunkFiles.length}개`);
+          console.log(`📋 생성된 청크: ${chunkFiles.length}개 (${chunkDuration}초씩)`);
           chunkFiles.forEach((file, index) => {
             console.log(`   청크 ${index + 1}: ${path.basename(file)}`);
           });
