@@ -8,8 +8,8 @@ uploads/
 node_modules/
 
 # Docker 관련
-.env
 .env.local
+.env.production
 
 # 큰 바이너리 파일
 *.mp3
@@ -33,3 +33,10 @@ railway.json
 # .dockerignore - Git에 포함
 
 # Windows 배치 스크립트는 Git에 포함함 (Windows PC에서 필요)
+
+# HTTP 버퍼 크기 증가
+git config http.postBuffer 524288000  # 500MB
+
+# 타임아웃 증가
+git config http.lowSpeedLimit 0
+git config http.lowSpeedTime 999999
