@@ -190,17 +190,28 @@ async function transcribeWithLocalWhisperSync(audioFilePath, jobId, language = '
   });
 }
 
+// 파일 크기 기반 예상 시간 계산 (실제 데이터 기반)
+function estimateDurationFromSize(fileSizeKB) {
+  // 실제 측정: 2.1KB/초
+  const ACTUAL_RATIO = 2.1; // KB per second
+  return Math.ceil(fileSizeKB / ACTUAL_RATIO);
+}
+
 // 파일 크기 기반 예상 청크 수 계산
 function estimateChunkCount(fileSize) {
-  // 대략적인 계산: 1MB당 약 60초, 120초 청크 기준
-  const fileSizeMB = fileSize / (1024 * 1024);
-  const estimatedDurationSeconds = fileSizeMB * 60; // 1MB = 약 60초
-  const chunkDurationSeconds = 120; // 2분 청크
+  const fileSizeKB = fileSize / 1024;
+  const estimatedDurationSeconds = estimateDurationFromSize(fileSizeKB);
+  const chunkDurationSeconds = 60; // 1분 청크
   
   const estimatedChunks = Math.ceil(estimatedDurationSeconds / chunkDurationSeconds);
   
   // 최소 1개, 최대 10개로 제한
   return Math.max(1, Math.min(10, estimatedChunks));
+}
+
+function shouldUseAsyncProcessing(fileSizeKB) {
+  // 65KB 기준 (약 30초)
+  return fileSizeKB > 65;
 }
 
 // 🎯 독립적인 Redis 폴링 시스템 (import 없이)
@@ -457,14 +468,18 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     
     // 🔧 파일 크기 기반 자동 판단 로직
     const fileSizeKB = fileSize / 1024;
-    const shouldUseAsync = fileSizeKB > 100; // 100KB 초과시 비동기
-    const async = req.body.async === 'true' || shouldUseAsync;
+    const estimatedDuration = estimateDurationFromSize(fileSizeKB);
 
-    console.log('📁 업로드된 파일:', originalFilename);
-    console.log('📊 파일 크기:', fileSize, 'bytes (', fileSizeKB.toFixed(1), 'KB)');
-    console.log('🌐 언어 설정:', language);
-    console.log('⚡ 처리 방식:', async ? '분산처리' : '동기');
-    console.log('🎯 자동 판단:', shouldUseAsync ? '파일 크기로 인한 분산처리' : '요청에 따른 처리');
+    // 30초 기준으로 동기/비동기 결정
+    const shouldUseAsync = estimatedDuration > 30 || req.body.async === 'true';
+
+    if (shouldUseAsync) {
+      // 비동기 처리 로직
+      console.log(`🔄 비동기 처리 시작 [${jobId}] - 예상 ${estimatedDuration}초`);
+    } else {
+      // 동기 처리 로직
+      console.log(`⚡ 동기 처리 시작 [${jobId}] - 예상 ${estimatedDuration}초`);
+    }
 
     // Whisper 설치 확인
     const whisperInstalled = await checkWhisperInstallation();
@@ -478,7 +493,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     // 작업 ID 생성
     const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    if (async) {
+    if (shouldUseAsync) {
       // 🔧 분산처리 (큐 시스템 사용)
       console.log(`🔄 분산처리 시작 [${jobId}]`);
       
