@@ -3,7 +3,21 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
-require('dotenv').config();
+
+// ✅ 환경별 .env 파일 로딩
+const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
+require('dotenv').config({ path: envFile });
+
+// ✅ 환경변수 기본값 설정
+const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
+const REDIS_PORT = process.env.REDIS_PORT || 6379;
+const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
+
+console.log(`🔧 환경: ${process.env.NODE_ENV || 'development'}`);
+console.log(`🔧 환경변수 파일: ${envFile}`);
+console.log(`🔧 Redis: ${REDIS_HOST}:${REDIS_PORT}`);
 
 const transcribeRoutes = require('./routes/transcribe');
 const { errorHandler, notFound } = require('./middleware/errorMiddleware');
@@ -13,8 +27,6 @@ const transcriptionQueue = require('./services/transcription-queue');
 // const resultCollector = require('./services/result-collector'); // ❌ 완전 제거
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0'; // 모든 IP에서 접근 허용
 
 // 보안 미들웨어
 app.use(helmet());

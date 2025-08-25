@@ -8,18 +8,15 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    env_file:
+      - .env.development  # ✅ 환경변수 파일 사용
     environment:
-      - NODE_ENV=development
-      - WORKER_ID=Direct-Backend
-      - REDIS_HOST=redis-cluster
-      - WORKER_MODE=api_only
+      # Docker 특화 환경변수만 여기에
       - CONTAINER_NAME=Direct-Backend
       - QUEUE_PROCESSING=false
     volumes:
-      # ✅ 개발용 전체 소스 마운트
       - .:/app
       - /app/node_modules
-      - whisper_cache_direct:/tmp/whisper
     command: ["npm", "run", "dev:docker"]
     networks:
       - sayit-network

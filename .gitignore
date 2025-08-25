@@ -1,3 +1,14 @@
+# 환경변수 파일
+.env
+.env.local
+.env.*.local
+
+# 하지만 템플릿은 포함
+!.env.example
+!.env.development
+!.env.production
+
+
 # 임시 파일
 temp/
 uploads/
@@ -6,10 +17,6 @@ uploads/
 
 # Node modules (이미 있을 수 있음)
 node_modules/
-
-# Docker 관련
-.env.local
-.env.production
 
 # 큰 바이너리 파일
 *.mp3
