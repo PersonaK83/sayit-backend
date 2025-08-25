@@ -5,7 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 // ✅ 분산처리를 위한 audio-processor import 추가
-const { queueAudioTranscription } = require('../services/audio-processor');
+const { queueAudioTranscription, cleanupTempFiles } = require('../services/audio-processor');
 
 const router = express.Router();
 
@@ -320,6 +320,129 @@ async function checkRedisResults() {
 setInterval(checkRedisResults, 5000);
 console.log('✅ Redis 폴링 시스템 시작 (5초 간격)');
 
+// ✅ 개별 작업 처리 함수 (파일 정리 추가)
+async function processJobChunks(jobId, chunks, redisClient) {
+  try {
+    const job = transcriptionJobs.get(jobId);
+    
+    // ✅ 이미 완료된 작업은 건너뛰기 (중복 처리 방지)
+    if (!job || job.status !== JobStatus.PROCESSING) {
+      console.log(`⏭️ [Direct-Backend] 작업 [${jobId}] 건너뛰기: ${job ? job.status : '작업 없음'}`);
+      return;
+    }
+    
+    console.log(`🔍 [Direct-Backend] 작업 [${jobId}] 청크 상태 확인:`);
+    console.log(`   📊 완료된 청크: ${chunks.length}개`);
+    
+    // 예상 청크 수 확인
+    const expectedChunks = job.expectedChunks || estimateChunkCount(job.fileSize);
+    console.log(`   📊 예상 청크 수: ${expectedChunks}개`);
+    
+    // ✅ 중복 청크 제거
+    const uniqueChunks = [];
+    const seenIndices = new Set();
+    
+    for (const chunk of chunks) {
+      if (!seenIndices.has(chunk.chunkIndex)) {
+        uniqueChunks.push(chunk);
+        seenIndices.add(chunk.chunkIndex);
+      } else {
+        console.log(`⚠️ [Direct-Backend] 중복 청크 발견: ${jobId} 청크 ${chunk.chunkIndex}`);
+      }
+    }
+    
+    console.log(`   📊 고유 청크: ${uniqueChunks.length}개`);
+    
+    // ✅ 모든 청크가 완료되었는지 확인
+    if (uniqueChunks.length >= expectedChunks) {
+      console.log(`🎯 [Direct-Backend] 모든 청크 완료! 취합 시작 [${jobId}]`);
+      
+      // ✅ 원자적 작업 상태 변경 (Race Condition 방지)
+      if (job.status !== JobStatus.PROCESSING) {
+        console.log(`⚠️ [Direct-Backend] 작업 [${jobId}] 이미 처리됨: ${job.status}`);
+        return;
+      }
+      
+      // 청크를 인덱스 순서대로 정렬
+      const sortedChunks = uniqueChunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+      
+      // 모든 청크 결과를 순서대로 결합
+      const finalResult = sortedChunks.map(chunk => chunk.result).join(' ');
+      
+      // 처리한 컨테이너 목록
+      const processedByList = [...new Set(sortedChunks.map(chunk => chunk.processedBy))];
+      
+      // ✅ 원자적 상태 업데이트
+      job.status = JobStatus.COMPLETED;
+      job.completedAt = Date.now();
+      job.transcript = finalResult;
+      job.error = null;
+      transcriptionJobs.set(jobId, job);
+      
+      console.log(`✅ [Direct-Backend] 작업 완료 처리 [${jobId}]`);
+      console.log(`📝 [Direct-Backend] 최종 결과: ${finalResult.substring(0, 100)}...`);
+      console.log(`🏷️ [Direct-Backend] 처리 컨테이너들: ${processedByList.join(', ')}`);
+      console.log(`📊 [Direct-Backend] 청크별 처리자:`);
+      
+      sortedChunks.forEach((chunk) => {
+        console.log(`   청크 ${chunk.chunkIndex}: ${chunk.processedBy}`);
+      });
+      
+      // ✅ 처리된 키들 안전하게 삭제
+      const deletedKeys = [];
+      for (const chunk of chunks) {
+        try {
+          const deleted = await redisClient.del(chunk.key);
+          if (deleted) {
+            deletedKeys.push(chunk.key);
+          }
+        } catch (delError) {
+          console.error(`❌ [Direct-Backend] 키 삭제 실패: ${chunk.key}`, delError);
+        }
+      }
+      
+      console.log(`🗑️ [Direct-Backend] 삭제된 키: ${deletedKeys.length}개`);
+      
+      // ✅ 임시 파일 정리 (비동기로 실행)
+      setTimeout(async () => {
+        try {
+          const tempDir = `/app/temp/${jobId}`;
+          await cleanupTempFiles(tempDir);
+          console.log(`🧹 [Direct-Backend] 임시 파일 정리 완료 [${jobId}]`);
+        } catch (cleanupError) {
+          console.error(`❌ [Direct-Backend] 임시 파일 정리 실패 [${jobId}]:`, cleanupError);
+        }
+      }, 5000); // 5초 후 정리 (결과 전송 후)
+      
+    } else {
+      console.log(`⏳ [Direct-Backend] 작업 [${jobId}] 대기 중: ${uniqueChunks.length}/${expectedChunks} 청크 완료`);
+      
+      // 완료된 청크 목록 출력
+      const completedIndices = uniqueChunks.map(c => c.chunkIndex).sort((a, b) => a - b);
+      console.log(`   📋 완료된 청크: [${completedIndices.join(', ')}]`);
+      
+      // 대기 중인 청크 목록
+      const allIndices = Array.from({length: expectedChunks}, (_, i) => i);
+      const pendingIndices = allIndices.filter(i => !completedIndices.includes(i));
+      console.log(`   ⏳ 대기 중인 청크: [${pendingIndices.join(', ')}]`);
+    }
+    
+  } catch (error) {
+    console.error(`❌ [Direct-Backend] 작업 [${jobId}] 처리 실패:`, error);
+  }
+}
+
+// ✅ 업로드 파일 정리 함수
+async function cleanupUploadFile(filePath) {
+  try {
+    console.log(`🧹 [Direct-Backend] 업로드 파일 정리: ${filePath}`);
+    await fs.unlink(filePath);
+    console.log(`✅ [Direct-Backend] 업로드 파일 정리 완료: ${filePath}`);
+  } catch (error) {
+    console.error(`❌ [Direct-Backend] 업로드 파일 정리 실패: ${filePath}`, error);
+  }
+}
+
 // API 라우트들
 router.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
@@ -371,7 +494,8 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
         completedAt: null,
         transcript: null,
         error: null,
-        expectedChunks: null // ✅ 예상 청크 수 저장용
+        expectedChunks: null,
+        uploadFilePath: audioFilePath // ✅ 업로드 파일 경로 저장
       };
 
       transcriptionJobs.set(jobId, job);
@@ -391,11 +515,21 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
         
         console.log(`📊 [Direct-Backend] 예상 청크 수: ${queueResult.chunkCount}개`);
         
+        // ✅ 업로드 파일 정리 예약 (30분 후)
+        setTimeout(async () => {
+          await cleanupUploadFile(audioFilePath);
+        }, 30 * 60 * 1000); // 30분 후
+        
       } catch (error) {
         console.error(`❌ 큐 등록 실패 [${jobId}]:`, error);
         job.status = JobStatus.FAILED;
         job.error = '큐 등록 실패';
         transcriptionJobs.set(jobId, job);
+        
+        // ✅ 실패 시 즉시 업로드 파일 정리
+        setTimeout(async () => {
+          await cleanupUploadFile(audioFilePath);
+        }, 5000); // 5초 후
       }
       
       // 즉시 응답 (JobID + processing 상태)
@@ -468,6 +602,11 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
           fileSize
         });
       }
+
+      // ✅ 동기 처리 완료 후 파일 정리
+      setTimeout(async () => {
+        await cleanupUploadFile(audioFilePath);
+      }, 10000); // 10초 후
     }
 
   } catch (error) {
@@ -550,5 +689,54 @@ router.get('/health', (req, res) => {
     uptime: process.uptime()
   });
 });
+
+// ✅ 정기적 파일 정리 (1시간마다)
+setInterval(async () => {
+  try {
+    console.log('🧹 [Direct-Backend] 정기 파일 정리 시작...');
+    
+    const now = Date.now();
+    const oneHourAgo = now - (60 * 60 * 1000);
+    
+    // 1시간 이상 된 temp 디렉토리 정리
+    const tempBaseDir = '/app/temp';
+    const tempDirs = await fs.readdir(tempBaseDir).catch(() => []);
+    
+    for (const dir of tempDirs) {
+      if (dir.startsWith('job_')) {
+        const dirPath = path.join(tempBaseDir, dir);
+        const stats = await fs.stat(dirPath).catch(() => null);
+        
+        if (stats && stats.mtime.getTime() < oneHourAgo) {
+          console.log(`🧹 [Direct-Backend] 오래된 temp 디렉토리 정리: ${dir}`);
+          await cleanupTempFiles(dirPath);
+        }
+      }
+    }
+    
+    // 1시간 이상 된 업로드 파일 정리
+    const uploadDir = '/app/uploads';
+    const uploadFiles = await fs.readdir(uploadDir).catch(() => []);
+    
+    for (const file of uploadFiles) {
+      if (file.startsWith('audio-')) {
+        const filePath = path.join(uploadDir, file);
+        const stats = await fs.stat(filePath).catch(() => null);
+        
+        if (stats && stats.mtime.getTime() < oneHourAgo) {
+          console.log(`🧹 [Direct-Backend] 오래된 업로드 파일 정리: ${file}`);
+          await fs.unlink(filePath).catch(console.error);
+        }
+      }
+    }
+    
+    console.log('✅ [Direct-Backend] 정기 파일 정리 완료');
+    
+  } catch (error) {
+    console.error('❌ [Direct-Backend] 정기 파일 정리 실패:', error);
+  }
+}, 60 * 60 * 1000); // 1시간마다
+
+console.log('✅ 정기 파일 정리 시스템 시작 (1시간 간격)');
 
 module.exports = router;
