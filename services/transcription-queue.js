@@ -90,7 +90,7 @@ async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language
     const whisperArgs = [
       'whisper',
       chunkPath,
-      '--model', 'base',
+      '--model', 'small',
       '--output_format', 'txt',
       '--output_dir', chunkDir, // 청크 파일과 같은 디렉토리
       '--verbose', 'False',
