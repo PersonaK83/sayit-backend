@@ -77,7 +77,67 @@ const transcriptionQueue = new Queue('audio transcription', {
   },
 });
 
-// 직접 Whisper 변환 함수 구현
+// ✅ 언어별 최적화 설정 함수 추가
+function getLanguageOptimizedSettings(language) {
+  const baseSettings = {
+    model: 'small',
+    task: 'transcribe',
+    output_format: 'txt',
+    verbose: 'False'
+  };
+
+  switch (language) {
+    case 'ko': // 한국어 최적화
+      return {
+        ...baseSettings,
+        language: 'ko',
+        temperature: '0.2',        // 일관성 중시 (문법 복잡성)
+        beam_size: '5',           // 다양한 후보 검토
+        best_of: '3',            // 3번 시도 중 최고
+        patience: '2.0',         // 충분한 디코딩 시간
+        // 한국어 특화 설정
+        suppress_tokens: '-1',   // 특수 토큰 억제 해제
+        condition_on_previous_text: 'True', // 문맥 연결 강화
+      };
+
+    case 'en': // 영어 최적화
+      return {
+        ...baseSettings,
+        language: 'en',
+        temperature: '0.3',        // 약간 더 유연하게
+        beam_size: '5',           
+        best_of: '3',            
+        patience: '1.5',         // 상대적으로 빠르게
+        // 영어 특화 설정
+        suppress_tokens: '-1',
+        condition_on_previous_text: 'True',
+      };
+
+    case 'auto': // 자동 감지 (보수적 설정)
+      return {
+        ...baseSettings,
+        temperature: '0.25',       // 중간값
+        beam_size: '3',           // 보수적
+        best_of: '2',
+        patience: '1.8',
+        // 언어 지정 안함 (자동 감지)
+        suppress_tokens: '-1',
+        condition_on_previous_text: 'True',
+      };
+
+    default: // 기본 설정
+      return {
+        ...baseSettings,
+        language: language,
+        temperature: '0.25',
+        beam_size: '3',
+        best_of: '2',
+        patience: '1.8',
+      };
+  }
+}
+
+// 직접 Whisper 변환 함수 구현 (✅ 언어별 최적화 적용)
 async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language) {
   return new Promise((resolve) => {
     console.log(`🎙️ [${CONTAINER_NAME}] Whisper 변환 시작 [${jobId}_chunk_${chunkIndex}]...`);
@@ -87,20 +147,33 @@ async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language
     // 청크 파일과 같은 디렉토리에 결과 저장
     const chunkDir = path.dirname(chunkPath);
     
+    // ✅ 언어별 최적화 설정 적용
+    const optimizedSettings = getLanguageOptimizedSettings(language);
+    console.log(`🎯 [${CONTAINER_NAME}] ${language} 최적화 설정 적용:`, optimizedSettings);
+    
+    // ✅ 최적화된 whisper 인자 생성
     const whisperArgs = [
       'whisper',
       chunkPath,
-      '--model', 'small',
-      '--output_format', 'txt',
-      '--output_dir', chunkDir, // 청크 파일과 같은 디렉토리
-      '--verbose', 'False',
+      '--model', optimizedSettings.model,
+      '--task', optimizedSettings.task,
+      '--output_format', optimizedSettings.output_format,
+      '--output_dir', chunkDir,
+      '--verbose', optimizedSettings.verbose,
+      '--temperature', optimizedSettings.temperature,
+      '--beam_size', optimizedSettings.beam_size,
+      '--best_of', optimizedSettings.best_of,
+      '--patience', optimizedSettings.patience,
+      '--suppress_tokens', optimizedSettings.suppress_tokens,
+      '--condition_on_previous_text', optimizedSettings.condition_on_previous_text,
     ];
 
-    if (language !== 'auto') {
-      whisperArgs.push('--language', language);
+    // ✅ 언어별 조건부 설정
+    if (optimizedSettings.language) {
+      whisperArgs.push('--language', optimizedSettings.language);
     }
 
-    console.log(`🔧 [${CONTAINER_NAME}] Whisper 명령어: python3 -m ${whisperArgs.join(' ')}`);
+    console.log(`🔧 [${CONTAINER_NAME}] ${language} 최적화 명령어: python3 -m ${whisperArgs.join(' ')}`);
     console.log(`📂 [${CONTAINER_NAME}] 출력 디렉토리: ${chunkDir}`);
 
     const whisper = spawn('python3', ['-m'].concat(whisperArgs));
