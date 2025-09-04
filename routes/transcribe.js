@@ -4,6 +4,9 @@ const fs = require('fs-extra');
 const path = require('path');
 const { spawn } = require('child_process');
 
+// ✅ Redis 모듈 import 추가 (CRITICAL FIX!)
+const redis = require('redis');
+
 // ✅ 분산처리를 위한 audio-processor import 추가
 const { queueAudioTranscription, cleanupTempFiles } = require('../services/audio-processor');
 
@@ -199,14 +202,23 @@ function estimateDurationFromSize(fileSizeKB) {
 
 // 동적 청크 크기 계산 (audio-processor.js와 동일)
 function calculateOptimalChunkDuration(estimatedDurationSeconds) {
+  console.log(`📊 예상 파일 길이: ${estimatedDurationSeconds}초 (${(estimatedDurationSeconds/60).toFixed(1)}분)`);
+  
   if (estimatedDurationSeconds <= 60) {        // 1분 이하
-    return 30;  // 30초 청크
-  } else if (estimatedDurationSeconds <= 180) { // 3분 이하
-    return 45;  // 45초 청크
-  } else if (estimatedDurationSeconds <= 600) { // 10분 이하
-    return 60;  // 1분 청크
-  } else {                                      // 10분 초과
-    return 90;  // 1.5분 청크
+    console.log(`🎯 청크 전략: 짧은 파일 - 30초 청크`);
+    return 30;  // 30초 청크 (2개 청크)
+  } else if (estimatedDurationSeconds <= 300) { // 5분 이하 ✅
+    console.log(`🎯 청크 전략: 보통 파일 - 60초 청크`);
+    return 60;  // 1분 청크 (5개 청크) ✅
+  } else if (estimatedDurationSeconds <= 900) { // 15분 이하 ✅
+    console.log(`🎯 청크 전략: 긴 파일 - 90초 청크`);
+    return 90;  // 1.5분 청크 (10개 청크)
+  } else if (estimatedDurationSeconds <= 1800) { // 30분 이하 ✅ NEW!
+    console.log(`🎯 청크 전략: 매우 긴 파일 - 120초 청크`);
+    return 120; // 2분 청크 (15개 청크) ✅
+  } else {                                      // 30분 초과 ✅ NEW!
+    console.log(`🎯 청크 전략: 초장시간 파일 - 180초 청크`);
+    return 180; // 3분 청크
   }
 }
 

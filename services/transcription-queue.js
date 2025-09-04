@@ -287,7 +287,7 @@ if (QUEUE_PROCESSING) {
     console.log(`📁 [${CONTAINER_NAME}] 청크 파일: ${chunkPath}`);
     console.log(`🏷️ [${CONTAINER_NAME}] 처리 컨테이너: ${CONTAINER_NAME} (동시성: ${maxConcurrency})`);
     
-    // ✅ 처리 시작 시간 기록
+    // ✅ 처리 시간 추적
     const startTime = Date.now();
     
     try {

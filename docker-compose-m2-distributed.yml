@@ -1,36 +1,4 @@
 services:
-  # API Gateway 제거 (포트 3000 충돌 방지)
-  # api-gateway:
-  #   build: 
-  #     context: .
-  #     dockerfile: Dockerfile.gateway
-  #   container_name: sayit-gateway-m2
-  #   restart: unless-stopped
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     - NODE_ENV=production
-  #     - REDIS_HOST=redis-cluster
-  #     - WORKER_NODES=worker-1,worker-2,worker-3
-  #     - PLATFORM=arm64
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         memory: 1G
-  #         cpus: '1'
-  #       reservations:
-  #         memory: 512M
-  #         cpus: '0.5'
-  #   networks:
-  #     - sayit-network
-  #   depends_on:
-  #     - redis-cluster
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-
   # Whisper 워커 1 (큐 처리 전용)
   whisper-worker-1:
     build: 
@@ -85,7 +53,7 @@ services:
       - OMP_NUM_THREADS=4            # ✅ 3→4 (성능 향상)
       - WORKER_MODE=queue_only
       - CONTAINER_NAME=Worker-2
-      - MEMORY_LIMIT=4G              # ✅ 메모리 정보 추가
+      - MEMORY_LIMIT=4G
     deploy:
       resources:
         limits:
@@ -122,7 +90,7 @@ services:
       - OMP_NUM_THREADS=4            # ✅ 3→4 (성능 향상)
       - WORKER_MODE=queue_only
       - CONTAINER_NAME=Worker-3
-      - MEMORY_LIMIT=4G              # ✅ 메모리 정보 추가
+      - MEMORY_LIMIT=4G
     deploy:
       resources:
         limits:
@@ -161,7 +129,7 @@ services:
       - WORKER_MODE=api_only
       - CONTAINER_NAME=Direct-Backend
       - QUEUE_PROCESSING=false       # ✅ 명시적 설정
-      - MEMORY_LIMIT=4G              # ✅ 메모리 정보 추가
+      - MEMORY_LIMIT=4G
     deploy:
       resources:
         limits:
@@ -230,7 +198,7 @@ volumes:
   whisper_cache_1:
   whisper_cache_2:
   whisper_cache_3:
-  whisper_cache_direct:  # ✅ direct-backend용 캐시 추가
+  whisper_cache_direct:
 
 networks:
   sayit-network:
