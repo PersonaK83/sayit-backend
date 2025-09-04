@@ -137,7 +137,7 @@ async function queueAudioTranscription(audioFilePath, jobId, language = 'auto') 
     for (let index = 0; index < chunkFiles.length; index++) {
       const chunkPath = chunkFiles[index];
       
-      // ✅ 30분 대응: 지연 시간 최적화 (500ms → 200ms)
+      // ✅ 30분 대응: 지연 시간 및 타임아웃 최적화
       const job = await transcriptionQueue.add('chunk', {
         chunkPath,
         jobId, // 동일한 JobId 사용
@@ -145,11 +145,16 @@ async function queueAudioTranscription(audioFilePath, jobId, language = 'auto') 
         totalChunks: chunkFiles.length,
         language,
         outputDir,
-        estimatedProcessingTime: Math.ceil(120 / 3) // 2분 청크 → 약 40초 처리 예상
+        estimatedProcessingTime: Math.ceil(120 / 2) // 2분 청크 → 약 60초 처리 예상 (ARM64 고려)
       }, {
         priority: 10 - (index % 10), // 0-9 순환 우선순위
-        delay: Math.floor(index / 12) * 200, // 배치별 200ms 지연
-        timeout: 300000, // ✅ 5분 타임아웃 (긴 청크 대응)
+        delay: Math.floor(index / 12) * 300, // 배치별 300ms 지연 (안정성)
+        timeout: 600000, // ✅ 10분 타임아웃 (ARM64 성능 고려)
+        attempts: 2, // ✅ 재시도 2회로 제한 (빠른 실패)
+        backoff: {
+          type: 'exponential',
+          delay: 5000, // 5초 후 재시도
+        }
       });
       
       chunkJobs.push(job);

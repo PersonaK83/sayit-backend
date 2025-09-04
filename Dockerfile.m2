@@ -16,15 +16,25 @@ RUN apt-get update && apt-get install -y \
 # Python Virtual Environment 생성 (ARM64 최적화)
 RUN python3 -m venv /opt/whisper-env
 
-# ARM64 최적화 Whisper 설치
+# ✅ ARM64 최적화 Whisper 설치
 RUN /opt/whisper-env/bin/pip install --no-cache-dir \
     openai-whisper \
     torch \
     torchaudio \
     --extra-index-url https://download.pytorch.org/whl/cpu
 
+# ✅ ARM64 성능 최적화 설정
+ENV PYTORCH_CPUINFO_OVERRIDE_ARCH=arm64
+ENV OMP_NUM_THREADS=2
+ENV MKL_NUM_THREADS=2
+ENV TORCH_THREADS=2
+ENV WHISPER_CPU_THREADS=2
+
 # whisper 명령어를 전역에서 사용 가능하도록 링크
 RUN ln -s /opt/whisper-env/bin/whisper /usr/local/bin/whisper
+
+# ✅ Whisper 모델 사전 다운로드 (컨테이너 시작 시간 단축)
+RUN /opt/whisper-env/bin/python3 -c "import whisper; whisper.load_model('small')"
 
 # 비루트 사용자 생성
 RUN groupadd -r nodejs && useradd -r -g nodejs -m -d /home/nodejs nodejs

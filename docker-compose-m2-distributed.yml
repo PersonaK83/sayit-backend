@@ -9,14 +9,18 @@ services:
     environment:
       - WORKER_ID=Worker-1
       - REDIS_HOST=redis-cluster
-      - MAX_CONCURRENT_CHUNKS=4      # ✅ 2→4 (30분 대응)
-      - QUEUE_PROCESSING=true        # ✅ 명시적 설정 추가
+      - MAX_CONCURRENT_CHUNKS=2      # ✅ 4→2 (타임아웃 방지를 위해 보수적 설정)
+      - QUEUE_PROCESSING=true        
       - PLATFORM=arm64
       - PYTORCH_ENABLE_MPS_FALLBACK=1
-      - OMP_NUM_THREADS=4            # ✅ 3→4 (성능 향상)
+      - OMP_NUM_THREADS=2            # ✅ 4→2 (ARM64 안정성)
       - WORKER_MODE=queue_only
       - CONTAINER_NAME=Worker-1
-      - MEMORY_LIMIT=4G              # ✅ 메모리 정보 추가
+      - MEMORY_LIMIT=4G
+      # ✅ ARM64 최적화 환경변수 추가
+      - PYTORCH_CPUINFO_OVERRIDE_ARCH=arm64
+      - WHISPER_CPU_THREADS=2
+      - TORCH_THREADS=2
     deploy:
       resources:
         limits:
@@ -46,14 +50,18 @@ services:
     environment:
       - WORKER_ID=Worker-2
       - REDIS_HOST=redis-cluster
-      - MAX_CONCURRENT_CHUNKS=4      # ✅ 2→4 (30분 대응)
-      - QUEUE_PROCESSING=true        # ✅ 명시적 설정 추가
+      - MAX_CONCURRENT_CHUNKS=2      # ✅ 4→2 (타임아웃 방지)
+      - QUEUE_PROCESSING=true
       - PLATFORM=arm64
       - PYTORCH_ENABLE_MPS_FALLBACK=1
-      - OMP_NUM_THREADS=4            # ✅ 3→4 (성능 향상)
+      - OMP_NUM_THREADS=2            # ✅ 4→2 (ARM64 안정성)
       - WORKER_MODE=queue_only
       - CONTAINER_NAME=Worker-2
       - MEMORY_LIMIT=4G
+      # ✅ ARM64 최적화 환경변수 추가
+      - PYTORCH_CPUINFO_OVERRIDE_ARCH=arm64
+      - WHISPER_CPU_THREADS=2
+      - TORCH_THREADS=2
     deploy:
       resources:
         limits:
@@ -83,14 +91,18 @@ services:
     environment:
       - WORKER_ID=Worker-3
       - REDIS_HOST=redis-cluster
-      - MAX_CONCURRENT_CHUNKS=4      # ✅ 2→4 (30분 대응)
-      - QUEUE_PROCESSING=true        # ✅ 명시적 설정 추가
+      - MAX_CONCURRENT_CHUNKS=2      # ✅ 4→2 (타임아웃 방지)
+      - QUEUE_PROCESSING=true
       - PLATFORM=arm64
       - PYTORCH_ENABLE_MPS_FALLBACK=1
-      - OMP_NUM_THREADS=4            # ✅ 3→4 (성능 향상)
+      - OMP_NUM_THREADS=2            # ✅ 4→2 (ARM64 안정성)
       - WORKER_MODE=queue_only
       - CONTAINER_NAME=Worker-3
       - MEMORY_LIMIT=4G
+      # ✅ ARM64 최적화 환경변수 추가
+      - PYTORCH_CPUINFO_OVERRIDE_ARCH=arm64
+      - WHISPER_CPU_THREADS=2
+      - TORCH_THREADS=2
     deploy:
       resources:
         limits:

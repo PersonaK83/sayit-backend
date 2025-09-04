@@ -74,6 +74,8 @@ const transcriptionQueue = new Queue('audio transcription', {
       type: 'exponential',
       delay: 2000,
     },
+    // ✅ 30분 대응: 타임아웃 10분으로 확장
+    timeout: 600000, // 5분 → 10분 (ARM64 성능 고려)
   },
 });
 
@@ -137,7 +139,7 @@ function getLanguageOptimizedSettings(language) {
   }
 }
 
-// 직접 Whisper 변환 함수 구현 (✅ 언어별 최적화 적용)
+// ✅ ARM64 최적화된 whisper 인자 생성
 async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language) {
   return new Promise((resolve) => {
     console.log(`🎙️ [${CONTAINER_NAME}] Whisper 변환 시작 [${jobId}_chunk_${chunkIndex}]...`);
@@ -151,9 +153,8 @@ async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language
     const optimizedSettings = getLanguageOptimizedSettings(language);
     console.log(`🎯 [${CONTAINER_NAME}] ${language} 최적화 설정 적용:`, optimizedSettings);
     
-    // ✅ 최적화된 whisper 인자 생성
+    // ✅ ARM64 최적화된 whisper 인자 생성
     const whisperArgs = [
-      'whisper',
       chunkPath,
       '--model', optimizedSettings.model,
       '--task', optimizedSettings.task,
@@ -166,6 +167,10 @@ async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language
       '--patience', optimizedSettings.patience,
       '--suppress_tokens', optimizedSettings.suppress_tokens,
       '--condition_on_previous_text', optimizedSettings.condition_on_previous_text,
+      // ✅ ARM64 CPU 최적화 추가
+      '--fp16', 'False',           // FP16 비활성화 (ARM64 CPU 호환성)
+      '--threads', '2',            // CPU 스레드 제한 (메모리 절약)
+      '--device', 'cpu',           // 명시적 CPU 사용
     ];
 
     // ✅ 언어별 조건부 설정
@@ -173,26 +178,50 @@ async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language
       whisperArgs.push('--language', optimizedSettings.language);
     }
 
-    console.log(`🔧 [${CONTAINER_NAME}] ${language} 최적화 명령어: python3 -m ${whisperArgs.join(' ')}`);
+    console.log(`🔧 [${CONTAINER_NAME}] ${language} 최적화 명령어: whisper ${whisperArgs.join(' ')}`);
     console.log(`📂 [${CONTAINER_NAME}] 출력 디렉토리: ${chunkDir}`);
+    console.log(`⏰ [${CONTAINER_NAME}] 예상 처리 시간: 30-90초 (ARM64 최적화 적용)`);
 
-    const whisper = spawn('python3', ['-m'].concat(whisperArgs));
+    // ✅ CRITICAL FIX: symlink된 whisper 명령어 직접 사용
+    const whisper = spawn('whisper', whisperArgs);
 
     let outputData = '';
     let errorOutput = '';
+    let lastProgressTime = Date.now();
 
     whisper.stdout.on('data', (data) => {
       outputData += data.toString();
-      console.log(`📊 [${CONTAINER_NAME}] Whisper 출력: ${data.toString().trim()}`);
+      const output = data.toString().trim();
+      
+      // 진행률 파싱 및 표시
+      const progressMatch = output.match(/(\d+)%/);
+      if (progressMatch) {
+        const progress = parseInt(progressMatch[1]);
+        const now = Date.now();
+        if (now - lastProgressTime > 10000) { // 10초마다 진행률 로그
+          console.log(`📊 [${CONTAINER_NAME}] Whisper 진행률 [${jobId}_chunk_${chunkIndex}]: ${progress}%`);
+          lastProgressTime = now;
+        }
+      } else {
+        console.log(`📊 [${CONTAINER_NAME}] Whisper 출력: ${output}`);
+      }
     });
 
     whisper.stderr.on('data', (data) => {
       errorOutput += data.toString();
-      console.log(`⚠️ [${CONTAINER_NAME}] Whisper 경고: ${data.toString().trim()}`);
+      const error = data.toString().trim();
+      
+      // ARM64 경고는 로그 레벨 낮춤 (정상 동작)
+      if (error.includes('FP16 is not supported on CPU') || error.includes('MIDR_EL1')) {
+        console.log(`ℹ️ [${CONTAINER_NAME}] Whisper ARM64 알림: ${error}`);
+      } else {
+        console.log(`⚠️ [${CONTAINER_NAME}] Whisper 경고: ${error}`);
+      }
     });
 
     whisper.on('close', async (code) => {
-      console.log(`🎯 [${CONTAINER_NAME}] Whisper 프로세스 종료 [${jobId}_chunk_${chunkIndex}] 코드: ${code}`);
+      const processingTime = (Date.now() - Date.now()) / 1000; // 실제 시간 계산은 상위에서
+      console.log(`🎯 [${CONTAINER_NAME}] Whisper 프로세스 종료 [${jobId}_chunk_${chunkIndex}] 코드: ${code} (처리시간: ${processingTime}초)`);
 
       if (code === 0) {
         try {
@@ -253,9 +282,21 @@ async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language
         }
       } else {
         console.error(`❌ [${CONTAINER_NAME}] Whisper 변환 실패 [${jobId}_chunk_${chunkIndex}]:`, errorOutput);
+        
+        // ✅ 더 구체적인 에러 메시지
+        let errorMessage = `Whisper 프로세스 실패 (코드: ${code})`;
+        
+        if (code === null) {
+          errorMessage = '처리 시간 초과 (타임아웃)';
+        } else if (errorOutput.includes('No module named whisper')) {
+          errorMessage = 'Whisper 모듈이 설치되지 않았습니다';
+        } else if (errorOutput.includes('CUDA')) {
+          errorMessage = 'CUDA 설정 문제 (CPU 모드로 처리)';
+        }
+        
         resolve({
           success: false,
-          error: `Whisper 프로세스 실패 (코드: ${code})`
+          error: errorMessage
         });
       }
     });

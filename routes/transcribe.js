@@ -633,27 +633,53 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
           await cleanupUploadFile(audioFilePath);
         }, 30 * 60 * 1000); // 30분 후
         
+        // ✅ 정상 처리 응답
+        res.json({
+          jobId,
+          status: 'processing',
+          message: '음성 변환이 시작되었습니다.',
+          originalFilename,
+          fileSize,
+          expectedChunks: queueResult.chunkCount,
+          reason: shouldUseAsync ? '파일 크기로 인한 자동 분산처리' : '사용자 요청에 따른 분산처리'
+        });
+        
       } catch (error) {
         console.error(`❌ 큐 등록 실패 [${jobId}]:`, error);
         job.status = JobStatus.FAILED;
-        job.error = '큐 등록 실패';
+        job.error = `큐 등록 실패: ${error.message}`;
         transcriptionJobs.set(jobId, job);
+        
+        // ✅ CRITICAL FIX: 에러 응답 전송 (누락된 부분!)
+        res.status(500).json({
+          success: false,
+          error: '음성 변환 시작에 실패했습니다.',
+          details: error.message,
+          jobId,
+          originalFilename,
+          fileSize,
+          troubleshooting: {
+            commonCauses: [
+              'Redis 서버 연결 실패',
+              'Worker 컨테이너 미실행',
+              'temp 디렉토리 권한 문제',
+              'ffmpeg 라이브러리 문제'
+            ],
+            recommendations: [
+              'docker-compose ps로 컨테이너 상태 확인',
+              'docker logs sayit-redis-m2로 Redis 로그 확인',
+              'docker logs sayit-worker-1-m2로 Worker 로그 확인'
+            ]
+          }
+        });
         
         // ✅ 실패 시 즉시 업로드 파일 정리
         setTimeout(async () => {
           await cleanupUploadFile(audioFilePath);
         }, 5000); // 5초 후
+        
+        return; // ✅ 더 이상 진행하지 않음
       }
-      
-      // 즉시 응답 (JobID + processing 상태)
-      res.json({
-        jobId,
-        status: 'processing',
-        message: '음성 변환이 시작되었습니다.',
-        originalFilename,
-        fileSize,
-        reason: shouldUseAsync ? '파일 크기로 인한 자동 분산처리' : '사용자 요청에 따른 분산처리'
-      });
       
     } else {
       // 🔧 동기 처리 (Direct Backend에서 직접 처리)
