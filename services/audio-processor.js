@@ -12,22 +12,25 @@ function estimateDurationFromSize(fileSizeKB) {
   return Math.ceil(fileSizeKB / ACTUAL_RATIO);
 }
 
-// 파일 길이에 따른 동적 청크 크기 계산
+// ✅ 30분 대응 청크 크기 최적화
 function calculateOptimalChunkDuration(estimatedDurationSeconds) {
-  console.log(`📊 예상 파일 길이: ${estimatedDurationSeconds}초`);
+  console.log(`📊 예상 파일 길이: ${estimatedDurationSeconds}초 (${(estimatedDurationSeconds/60).toFixed(1)}분)`);
   
   if (estimatedDurationSeconds <= 60) {        // 1분 이하
     console.log(`🎯 청크 전략: 짧은 파일 - 30초 청크`);
     return 30;  // 30초 청크 (2개 청크)
-  } else if (estimatedDurationSeconds <= 180) { // 3분 이하
-    console.log(`🎯 청크 전략: 보통 파일 - 45초 청크`);
-    return 45;  // 45초 청크 (3-4개 청크)
-  } else if (estimatedDurationSeconds <= 600) { // 10분 이하
-    console.log(`🎯 청크 전략: 긴 파일 - 60초 청크`);
-    return 60;  // 1분 청크 (최대 10개 청크)
-  } else {                                      // 10분 초과
-    console.log(`🎯 청크 전략: 매우 긴 파일 - 90초 청크`);
-    return 90;  // 1.5분 청크
+  } else if (estimatedDurationSeconds <= 300) { // 5분 이하
+    console.log(`🎯 청크 전략: 보통 파일 - 60초 청크`);
+    return 60;  // 1분 청크 (5개 청크)
+  } else if (estimatedDurationSeconds <= 900) { // 15분 이하
+    console.log(`🎯 청크 전략: 긴 파일 - 90초 청크`);
+    return 90;  // 1.5분 청크 (10개 청크)
+  } else if (estimatedDurationSeconds <= 1800) { // 30분 이하 ✅
+    console.log(`🎯 청크 전략: 매우 긴 파일 - 120초 청크`);
+    return 120; // 2분 청크 (15개 청크) ✅ NEW!
+  } else {                                      // 30분 초과
+    console.log(`🎯 청크 전략: 초장시간 파일 - 180초 청크`);
+    return 180; // 3분 청크 ✅ NEW!
   }
 }
 
@@ -112,7 +115,7 @@ async function splitAudioFile(audioFilePath, jobId, customChunkDuration = null) 
   });
 }
 
-// 큐에 청크 작업 등록 (JobId를 외부에서 받음)
+// ✅ 큐에 청크 작업 등록 (30분 대응 개선)
 async function queueAudioTranscription(audioFilePath, jobId, language = 'auto') {
   try {
     console.log('🚀 큐 기반 음성 변환 시작');
@@ -123,25 +126,34 @@ async function queueAudioTranscription(audioFilePath, jobId, language = 'auto') 
     // 1. 파일 분할 (JobId 전달)
     const { chunkFiles, outputDir } = await splitAudioFile(audioFilePath, jobId);
     
-    // 2. 각 청크를 큐에 등록
+    console.log(`📊 [${jobId}] 총 청크 수: ${chunkFiles.length}개`);
+    
+    // ✅ 30분 대응: 청크가 많을 때 배치 처리 최적화
+    const batchSize = Math.min(12, chunkFiles.length); // 최대 12개씩 배치
+    console.log(`📦 [${jobId}] 배치 크기: ${batchSize}개씩 처리`);
+    
+    // 2. 각 청크를 큐에 등록 (우선순위 및 지연 최적화)
     const chunkJobs = [];
     for (let index = 0; index < chunkFiles.length; index++) {
       const chunkPath = chunkFiles[index];
       
+      // ✅ 30분 대응: 지연 시간 최적화 (500ms → 200ms)
       const job = await transcriptionQueue.add('chunk', {
         chunkPath,
         jobId, // 동일한 JobId 사용
         chunkIndex: index,
         totalChunks: chunkFiles.length,
         language,
-        outputDir
+        outputDir,
+        estimatedProcessingTime: Math.ceil(120 / 3) // 2분 청크 → 약 40초 처리 예상
       }, {
-        priority: 10 - index,
-        delay: index * 500,
+        priority: 10 - (index % 10), // 0-9 순환 우선순위
+        delay: Math.floor(index / 12) * 200, // 배치별 200ms 지연
+        timeout: 300000, // ✅ 5분 타임아웃 (긴 청크 대응)
       });
       
       chunkJobs.push(job);
-      console.log(`📋 청크 ${index + 1}/${chunkFiles.length} 큐 등록: ${job.id}`);
+      console.log(`📋 청크 ${index + 1}/${chunkFiles.length} 큐 등록: ${job.id} (우선순위: ${job.opts.priority})`);
     }
     
     console.log(`🎯 큐 등록 완료 [${jobId}]: ${chunkFiles.length}개 청크`);

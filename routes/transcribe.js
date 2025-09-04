@@ -210,7 +210,7 @@ function calculateOptimalChunkDuration(estimatedDurationSeconds) {
   }
 }
 
-// 파일 크기 기반 예상 청크 수 계산 (동적 청크 크기 반영)
+// ✅ 30분 대응: 청크 수 제한 해제
 function estimateChunkCount(fileSize) {
   const fileSizeKB = fileSize / 1024;
   const estimatedDurationSeconds = estimateDurationFromSize(fileSizeKB);
@@ -218,18 +218,22 @@ function estimateChunkCount(fileSize) {
   
   const estimatedChunks = Math.ceil(estimatedDurationSeconds / chunkDurationSeconds);
   
-  // 최소 1개, 최대 10개로 제한
-  return Math.max(1, Math.min(10, estimatedChunks));
+  // ✅ 30분 대응: 최대 제한을 10개 → 30개로 확장
+  const maxChunks = 30; // 최대 30개 청크 (30분 × 2분청크 = 15개 여유)
+  const finalChunks = Math.max(1, Math.min(maxChunks, estimatedChunks));
+  
+  console.log(`📊 청크 계산: ${estimatedDurationSeconds}초 → ${chunkDurationSeconds}초 청크 → ${estimatedChunks}개 → 제한적용 ${finalChunks}개`);
+  
+  return finalChunks;
 }
 
+// ✅ 30분 대응: 파일 크기 기준 조정
 function shouldUseAsyncProcessing(fileSizeKB) {
-  // 65KB 기준 (약 30초)
+  // 65KB 기준 (약 30초) → 30분 대응을 위해 유지
   return fileSizeKB > 65;
 }
 
-// 🎯 독립적인 Redis 폴링 시스템 (import 없이)
-const redis = require('redis');
-
+// ✅ 30분 대응: Redis 폴링 로직 개선
 async function checkRedisResults() {
   try {
     console.log('🔍 [Direct-Backend] Redis 폴링 실행 중...');
@@ -240,12 +244,17 @@ async function checkRedisResults() {
     
     await redisClient.connect();
     
+    // ✅ 완료된 청크와 실패한 청크 모두 확인
     const completedKeys = await redisClient.keys('completed:*:chunk:*');
-    console.log(`📋 [Direct-Backend] Redis에서 발견된 완료 청크: ${completedKeys.length}개`);
+    const failedKeys = await redisClient.keys('failed:*:chunk:*');
+    
+    console.log(`📋 [Direct-Backend] Redis 현황: 완료 ${completedKeys.length}개, 실패 ${failedKeys.length}개`);
     
     // JobId별로 청크들을 그룹화
     const jobChunks = {};
+    const failedChunks = {};
     
+    // 완료된 청크들 처리
     for (const key of completedKeys) {
       try {
         const resultData = await redisClient.get(key);
@@ -253,7 +262,7 @@ async function checkRedisResults() {
           const data = JSON.parse(resultData);
           const { jobId, chunkIndex, result, processedBy, workerMode } = data;
           
-          console.log(`📦 [Direct-Backend] 청크 발견: ${jobId} 청크 ${chunkIndex} (처리자: ${processedBy})`);
+          console.log(`📦 [Direct-Backend] 완료 청크: ${jobId} 청크 ${chunkIndex} (처리자: ${processedBy})`);
           
           if (!jobChunks[jobId]) {
             jobChunks[jobId] = [];
@@ -268,7 +277,33 @@ async function checkRedisResults() {
           });
         }
       } catch (parseError) {
-        console.error('❌ [Direct-Backend] Redis 결과 파싱 실패:', parseError);
+        console.error('❌ [Direct-Backend] Redis 완료 결과 파싱 실패:', parseError);
+      }
+    }
+    
+    // ✅ 실패한 청크들 처리 (NEW!)
+    for (const key of failedKeys) {
+      try {
+        const failedData = await redisClient.get(key);
+        if (failedData) {
+          const data = JSON.parse(failedData);
+          const { jobId, chunkIndex, errorMessage, failedBy } = data;
+          
+          console.log(`💥 [Direct-Backend] 실패 청크: ${jobId} 청크 ${chunkIndex} (실패자: ${failedBy}) - ${errorMessage}`);
+          
+          if (!failedChunks[jobId]) {
+            failedChunks[jobId] = [];
+          }
+          
+          failedChunks[jobId].push({
+            chunkIndex,
+            errorMessage,
+            failedBy,
+            key
+          });
+        }
+      } catch (parseError) {
+        console.error('❌ [Direct-Backend] Redis 실패 결과 파싱 실패:', parseError);
       }
     }
     
@@ -277,58 +312,94 @@ async function checkRedisResults() {
       const job = transcriptionJobs.get(jobId);
       if (job && job.status === JobStatus.PROCESSING) {
         
-        // ✅ 올바른 청크 완료 확인 로직
+        // ✅ 실패한 청크도 고려한 완료 확인
+        const failedChunksForJob = failedChunks[jobId] || [];
+        const totalProcessedChunks = chunks.length + failedChunksForJob.length;
+        
         console.log(`🔍 [Direct-Backend] 작업 [${jobId}] 청크 상태 확인:`);
         console.log(`   📊 완료된 청크: ${chunks.length}개`);
+        console.log(`   💥 실패한 청크: ${failedChunksForJob.length}개`);
+        console.log(`   📊 총 처리된 청크: ${totalProcessedChunks}개`);
         
-        // 예상 청크 수 확인 (작업 등록 시 저장해야 함)
+        // 예상 청크 수 확인
         const expectedChunks = job.expectedChunks || estimateChunkCount(job.fileSize);
         console.log(`   📊 예상 청크 수: ${expectedChunks}개`);
         
-        // ✅ 모든 청크가 완료되었는지 확인
-        if (chunks.length >= expectedChunks) {
-          console.log(`🎯 [Direct-Backend] 모든 청크 완료! 취합 시작 [${jobId}]`);
+        // ✅ 30분 대응: 모든 청크가 완료되었는지 확인 (실패 포함)
+        if (totalProcessedChunks >= expectedChunks) {
+          console.log(`🎯 [Direct-Backend] 모든 청크 처리 완료! 취합 시작 [${jobId}]`);
           
           // 청크를 인덱스 순서대로 정렬
           const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
           
-          // 모든 청크 결과를 순서대로 결합
-          const finalResult = sortedChunks.map(chunk => chunk.result).join(' ');
+          // ✅ 실패한 청크는 빈 문자열로 처리 (연속성 보장)
+          const allChunks = [];
+          for (let i = 0; i < expectedChunks; i++) {
+            const chunk = sortedChunks.find(c => c.chunkIndex === i);
+            if (chunk) {
+              allChunks.push(chunk.result || '');
+            } else {
+              // 실패한 청크 확인
+              const failedChunk = failedChunksForJob.find(f => f.chunkIndex === i);
+              if (failedChunk) {
+                console.warn(`⚠️ [Direct-Backend] 청크 ${i} 실패로 인한 빈 구간: ${failedChunk.errorMessage}`);
+                allChunks.push(''); // 빈 문자열로 처리
+              } else {
+                console.warn(`⚠️ [Direct-Backend] 청크 ${i} 누락됨`);
+                allChunks.push('');
+              }
+            }
+          }
+          
+          // 모든 청크 결과를 순서대로 결합 (빈 구간 제외)
+          const finalResult = allChunks.filter(chunk => chunk.trim() !== '').join(' ');
           
           // 처리한 컨테이너 목록
           const processedByList = [...new Set(sortedChunks.map(chunk => chunk.processedBy))];
+          const successRate = (sortedChunks.length / expectedChunks * 100).toFixed(1);
           
           job.status = JobStatus.COMPLETED;
           job.completedAt = Date.now();
           job.transcript = finalResult;
-          job.error = null;
+          job.error = failedChunksForJob.length > 0 ? `일부 청크 실패 (${failedChunksForJob.length}/${expectedChunks}개)` : null;
+          job.successRate = successRate;
           transcriptionJobs.set(jobId, job);
           
           console.log(`✅ [Direct-Backend] 작업 완료 처리 [${jobId}]`);
-          console.log(`📝 [Direct-Backend] 최종 결과: ${finalResult.substring(0, 100)}...`);
+          console.log(`📝 [Direct-Backend] 최종 결과: ${finalResult.substring(0, 100)}... (${finalResult.length}자)`);
           console.log(`🏷️ [Direct-Backend] 처리 컨테이너들: ${processedByList.join(', ')}`);
-          console.log(`📊 [Direct-Backend] 청크별 처리자:`);
+          console.log(`📊 [Direct-Backend] 성공률: ${successRate}% (${sortedChunks.length}/${expectedChunks})`);
           
-          sortedChunks.forEach((chunk, index) => {
-            console.log(`   청크 ${chunk.chunkIndex}: ${chunk.processedBy}`);
-          });
-          
-          // 처리된 키들 삭제
+          // ✅ 처리된 키들과 실패 키들 모두 삭제
           for (const chunk of chunks) {
             await redisClient.del(chunk.key);
           }
+          for (const failed of failedChunksForJob) {
+            await redisClient.del(failed.key);
+          }
           
         } else {
-          console.log(`⏳ [Direct-Backend] 작업 [${jobId}] 대기 중: ${chunks.length}/${expectedChunks} 청크 완료`);
+          console.log(`⏳ [Direct-Backend] 작업 [${jobId}] 대기 중: ${totalProcessedChunks}/${expectedChunks} 청크 처리됨`);
           
-          // 완료된 청크 목록 출력
+          // ✅ 상세한 진행 상황 출력
           const completedIndices = chunks.map(c => c.chunkIndex).sort((a, b) => a - b);
-          console.log(`   📋 완료된 청크: [${completedIndices.join(', ')}]`);
-          
-          // 대기 중인 청크 목록
+          const failedIndices = failedChunksForJob.map(f => f.chunkIndex).sort((a, b) => a - b);
           const allIndices = Array.from({length: expectedChunks}, (_, i) => i);
-          const pendingIndices = allIndices.filter(i => !completedIndices.includes(i));
+          const pendingIndices = allIndices.filter(i => 
+            !completedIndices.includes(i) && !failedIndices.includes(i)
+          );
+          
+          console.log(`   📋 완료된 청크: [${completedIndices.join(', ')}]`);
+          if (failedIndices.length > 0) {
+            console.log(`   💥 실패한 청크: [${failedIndices.join(', ')}]`);
+          }
           console.log(`   ⏳ 대기 중인 청크: [${pendingIndices.join(', ')}]`);
+          
+          // ✅ 30분 대응: 장시간 대기 시 타임아웃 체크
+          const jobAge = Date.now() - job.createdAt;
+          if (jobAge > 600000) { // 10분 초과 대기
+            console.warn(`⚠️ [Direct-Backend] 작업 [${jobId}] 장시간 대기 (${Math.floor(jobAge/60000)}분)`);
+          }
         }
       }
     }
@@ -340,9 +411,9 @@ async function checkRedisResults() {
   }
 }
 
-// 5초마다 Redis 결과 확인
-setInterval(checkRedisResults, 5000);
-console.log('✅ Redis 폴링 시스템 시작 (5초 간격)');
+// ✅ 30분 대응: 폴링 간격 최적화 (5초 → 3초)
+setInterval(checkRedisResults, 3000);
+console.log('✅ Redis 폴링 시스템 시작 (3초 간격)');
 
 // ✅ 개별 작업 처리 함수 (파일 정리 추가)
 async function processJobChunks(jobId, chunks, redisClient) {
@@ -719,6 +790,154 @@ router.get('/health', (req, res) => {
     uptime: process.uptime()
   });
 });
+
+// ✅ 30분 대응: 워커 상태 및 큐 모니터링 API 추가
+router.get('/workers/status', async (req, res) => {
+  try {
+    const transcriptionQueue = require('../services/transcription-queue');
+    
+    const waiting = await transcriptionQueue.getWaiting();
+    const active = await transcriptionQueue.getActive();
+    const completed = await transcriptionQueue.getCompleted();
+    const failed = await transcriptionQueue.getFailed();
+    
+    // 활성 작업들의 상세 정보
+    const activeDetails = active.map(job => ({
+      id: job.id,
+      jobId: job.data.jobId,
+      chunkIndex: job.data.chunkIndex,
+      totalChunks: job.data.totalChunks,
+      language: job.data.language,
+      progress: job.progress(),
+      startedAt: job.processedOn,
+      worker: job.opts.worker || 'unknown'
+    }));
+    
+    // 실패한 작업들의 상세 정보
+    const failedDetails = failed.map(job => ({
+      id: job.id,
+      jobId: job.data.jobId,
+      chunkIndex: job.data.chunkIndex,
+      error: job.failedReason,
+      attempts: job.attemptsMade,
+      failedAt: job.failedOn
+    }));
+    
+    res.json({
+      timestamp: new Date().toISOString(),
+      queue: {
+        waiting: waiting.length,
+        active: active.length,
+        completed: completed.length,
+        failed: failed.length
+      },
+      activeJobs: activeDetails,
+      failedJobs: failedDetails,
+      systemInfo: {
+        containerName: process.env.CONTAINER_NAME || 'unknown',
+        workerMode: process.env.WORKER_MODE || 'unknown',
+        maxConcurrency: process.env.MAX_CONCURRENT_CHUNKS || 'unknown',
+        queueProcessing: process.env.QUEUE_PROCESSING !== 'false'
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ 워커 상태 확인 실패:', error);
+    res.status(500).json({ error: '워커 상태 확인 실패' });
+  }
+});
+
+// ✅ 30분 대응: 특정 작업의 상세 진행 상황 API
+router.get('/transcribe/:jobId/detailed-status', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const job = transcriptionJobs.get(jobId);
+
+    if (!job) {
+      return res.status(404).json({ 
+        error: '작업을 찾을 수 없습니다.',
+        jobId
+      });
+    }
+
+    // Redis에서 실시간 청크 상태 확인
+    const redisClient = redis.createClient({
+      url: 'redis://sayit-redis-m2:6379'
+    });
+    
+    await redisClient.connect();
+    
+    const completedKeys = await redisClient.keys(`completed:${jobId}:chunk:*`);
+    const failedKeys = await redisClient.keys(`failed:${jobId}:chunk:*`);
+    
+    const chunkStatus = [];
+    const expectedChunks = job.expectedChunks || estimateChunkCount(job.fileSize);
+    
+    // 각 청크별 상태 확인
+    for (let i = 0; i < expectedChunks; i++) {
+      const completedKey = `completed:${jobId}:chunk:${i}`;
+      const failedKey = `failed:${jobId}:chunk:${i}`;
+      
+      if (completedKeys.some(key => key === completedKey)) {
+        const data = JSON.parse(await redisClient.get(completedKey));
+        chunkStatus.push({
+          chunkIndex: i,
+          status: 'completed',
+          processedBy: data.processedBy,
+          completedAt: data.timestamp
+        });
+      } else if (failedKeys.some(key => key === failedKey)) {
+        const data = JSON.parse(await redisClient.get(failedKey));
+        chunkStatus.push({
+          chunkIndex: i,
+          status: 'failed',
+          failedBy: data.failedBy,
+          error: data.errorMessage,
+          failedAt: data.timestamp
+        });
+      } else {
+        chunkStatus.push({
+          chunkIndex: i,
+          status: 'pending'
+        });
+      }
+    }
+    
+    await redisClient.quit();
+
+    const response = {
+      jobId: job.id,
+      status: job.status,
+      originalFilename: job.originalFilename,
+      fileSize: job.fileSize,
+      expectedChunks: expectedChunks,
+      completedChunks: chunkStatus.filter(c => c.status === 'completed').length,
+      failedChunks: chunkStatus.filter(c => c.status === 'failed').length,
+      pendingChunks: chunkStatus.filter(c => c.status === 'pending').length,
+      chunkDetails: chunkStatus,
+      createdAt: job.createdAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      processingTime: job.completedAt ? job.completedAt - job.createdAt : Date.now() - job.createdAt
+    };
+
+    if (job.status === JobStatus.COMPLETED) {
+      response.transcript = job.transcript;
+      response.successRate = job.successRate;
+    } else if (job.status === JobStatus.FAILED) {
+      response.error = job.error;
+    }
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('❌ 상세 상태 확인 실패:', error);
+    res.status(500).json({ error: '상세 상태 확인 실패' });
+  }
+});
+
+
+
 
 // ✅ 정기적 파일 정리 (1시간마다)
 setInterval(async () => {

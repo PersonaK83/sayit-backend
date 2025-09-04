@@ -274,12 +274,21 @@ async function transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language
 if (QUEUE_PROCESSING) {
   console.log(`🎯 [${CONTAINER_NAME}] 큐 처리 활성화 - Worker로 동작`);
   
-  transcriptionQueue.process('chunk', 5, async (job) => {
+  // ✅ 환경변수 기반 동시성 설정 (NEW!)
+  const maxConcurrency = parseInt(process.env.MAX_CONCURRENT_CHUNKS) || 5;
+  console.log(`🎯 [${CONTAINER_NAME}] 큐 동시 처리 수: ${maxConcurrency}개`);
+  console.log(`🎯 [${CONTAINER_NAME}] 메모리 제한: ${process.env.MEMORY_LIMIT || '4G'}`);
+  
+  // ✅ 하드코딩 5 → 환경변수 기반으로 변경
+  transcriptionQueue.process('chunk', maxConcurrency, async (job) => {
     const { chunkPath, jobId, chunkIndex, totalChunks, language, outputDir } = job.data;
     
     console.log(`🎵 [${CONTAINER_NAME}] 청크 처리 시작 [${jobId}] ${chunkIndex + 1}/${totalChunks}`);
     console.log(`📁 [${CONTAINER_NAME}] 청크 파일: ${chunkPath}`);
-    console.log(`🏷️ [${CONTAINER_NAME}] 처리 컨테이너: ${CONTAINER_NAME} (${WORKER_MODE})`);
+    console.log(`🏷️ [${CONTAINER_NAME}] 처리 컨테이너: ${CONTAINER_NAME} (동시성: ${maxConcurrency})`);
+    
+    // ✅ 처리 시작 시간 기록
+    const startTime = Date.now();
     
     try {
       const result = await transcribeChunkWithWhisper(chunkPath, jobId, chunkIndex, language);
@@ -289,9 +298,10 @@ if (QUEUE_PROCESSING) {
       }
       
       const progress = ((chunkIndex + 1) / totalChunks) * 100;
+      const processingTime = (Date.now() - startTime) / 1000;
       job.progress(progress);
       
-      console.log(`✅ [${CONTAINER_NAME}] 청크 처리 완료 [${jobId}] ${chunkIndex + 1}/${totalChunks} (${progress.toFixed(1)}%)`);
+      console.log(`✅ [${CONTAINER_NAME}] 청크 처리 완료 [${jobId}] ${chunkIndex + 1}/${totalChunks} (${progress.toFixed(1)}%) 처리시간: ${processingTime.toFixed(1)}초`);
       console.log(`📝 [${CONTAINER_NAME}] 청크 결과: ${result.text?.substring(0, 100)}...`);
       
       // 🎯 Redis를 통한 결과 전달 (독립적으로 구현)
@@ -303,11 +313,17 @@ if (QUEUE_PROCESSING) {
         totalChunks,
         result: result.text,
         processedBy: CONTAINER_NAME,
-        workerMode: WORKER_MODE
+        workerMode: WORKER_MODE,
+        processingTime: processingTime
       };
       
     } catch (error) {
-      console.error(`❌ [${CONTAINER_NAME}] 청크 처리 실패 [${jobId}] ${chunkIndex + 1}/${totalChunks}:`, error);
+      const processingTime = (Date.now() - startTime) / 1000;
+      console.error(`❌ [${CONTAINER_NAME}] 청크 처리 실패 [${jobId}] ${chunkIndex + 1}/${totalChunks} (처리시간: ${processingTime.toFixed(1)}초):`, error);
+      
+      // ✅ 실패 청크 정보를 Redis에 저장 (디버깅용)
+      await saveFailedChunkInfo(jobId, chunkIndex, error.message, CONTAINER_NAME);
+      
       throw error;
     }
   });
@@ -335,6 +351,36 @@ if (QUEUE_PROCESSING) {
   
 } else {
   console.log(`🚫 [${CONTAINER_NAME}] 큐 처리 비활성화 - API 전용 모드`);
+}
+
+// ✅ 실패한 청크 정보 저장 함수 (NEW!)
+async function saveFailedChunkInfo(jobId, chunkIndex, errorMessage, containerName) {
+  try {
+    const redisClient = redis.createClient({
+      url: `redis://${redisConfig.host}:${redisConfig.port}`
+    });
+    
+    await redisClient.connect();
+    
+    const failedData = {
+      jobId,
+      chunkIndex, 
+      errorMessage,
+      timestamp: Date.now(),
+      failedBy: containerName,
+      retryable: true
+    };
+    
+    const key = `failed:${jobId}:chunk:${chunkIndex}`;
+    await redisClient.set(key, JSON.stringify(failedData), { EX: 7200 }); // 2시간 후 만료
+    
+    await redisClient.quit();
+    
+    console.log(`💥 [${containerName}] 실패 청크 정보 Redis 저장: ${key}`);
+    
+  } catch (error) {
+    console.error(`❌ [${containerName}] 실패 정보 저장 실패:`, error);
+  }
 }
 
 // Redis 결과 저장 함수 (컨테이너 정보 포함)
