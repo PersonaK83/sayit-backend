@@ -1063,17 +1063,17 @@ fix_gateway_direct() {
     docker stop sayit-gateway-m2 2>/dev/null
     docker rm sayit-gateway-m2 2>/dev/null
     
-    # 워커 1을 포트 3000으로 직접 연결
+    # ✅ 빌드된 실제 이미지 이름 사용
     docker run -d \
       --name sayit-direct-backend \
       -p 3000:3000 \
-      --network sayit-backend_sayit-network \
+      --network backend_sayit_sayit-network \
       -e REDIS_HOST=sayit-redis-m2 \
       -e WORKER_ID=direct-worker \
       -e NODE_ENV=production \
       -v $(pwd)/uploads:/app/uploads \
       -v $(pwd)/temp:/app/temp \
-      sayit-backend-whisper-worker-1:latest
+      backend_sayit-direct-backend:latest
     
     echo "⏳ 직접 백엔드 시작 대기 중..."
     sleep 15
